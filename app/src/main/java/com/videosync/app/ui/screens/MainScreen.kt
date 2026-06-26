@@ -1639,103 +1639,120 @@ private fun SyncPreviewDialog(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
 
+                // 表头
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.width(32.dp)) // checkbox 占位
+                    Text(
+                        text = "文件名",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(0.3f)
+                    )
+                    Text(
+                        text = "本地路径",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(0.3f)
+                    )
+                    Text(
+                        text = "远端路径",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(0.3f)
+                    )
+                    Text(
+                        text = "大小",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(0.1f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End
+                    )
+                }
+
                 // 文件列表
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = Modifier.heightIn(max = 500.dp)
                 ) {
                     itemsIndexed(filteredItems) { displayIndex, item ->
                         val originalIndex = if (searchQuery.isEmpty()) displayIndex
                         else items.indexOf(item)
                         val isSelected = originalIndex in selectedIndices
 
-                        ElevatedCard(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onToggleSelection(originalIndex) },
-                            colors = CardDefaults.elevatedCardColors(
-                                containerColor = if (isSelected) {
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                                } else {
-                                    MaterialTheme.colorScheme.surface
-                                }
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { onToggleSelection(originalIndex) }
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                    else if (displayIndex % 2 == 0) MaterialTheme.colorScheme.surface
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    // 文件名
-                                    Text(
-                                        text = item.fileName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    // 本地路径（带图标）
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Phone,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(14.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = item.localPath.substringBeforeLast('/').substringAfterLast('/'),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    // 远端路径（带图标）
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Cloud,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(14.dp),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = item.remotePath.substringBeforeLast('/'),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                // 文件大小对比
-                                Column(
-                                    horizontalAlignment = Alignment.End
-                                ) {
-                                    Text(
-                                        text = formatFileSize(item.remoteSize),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        text = "替换 ${formatFileSize(item.localSize)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                .clickable { onToggleSelection(originalIndex) }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 选择框
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { onToggleSelection(originalIndex) },
+                                modifier = Modifier.width(32.dp)
+                            )
+                            // 文件名
+                            Text(
+                                text = item.fileName,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(0.3f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            // 本地路径（完整显示）
+                            Text(
+                                text = item.localPath.substringBeforeLast('/'),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(0.3f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            // 远端路径（完整显示）
+                            Text(
+                                text = item.remotePath.substringBeforeLast('/'),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(0.3f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            // 大小
+                            Column(
+                                horizontalAlignment = Alignment.End,
+                                modifier = Modifier.weight(0.1f)
+                            ) {
+                                Text(
+                                    text = formatFileSize(item.remoteSize),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
                             }
                         }
+                        // 分割线
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(0.5.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        )
                     }
                 }
             }
