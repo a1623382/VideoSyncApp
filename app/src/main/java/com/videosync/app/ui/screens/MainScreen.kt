@@ -2299,20 +2299,27 @@ private suspend fun startSyncWithPreview(
             Logger.i("Sync", "开始处理任务 [$index]: ${item.fileName}")
 
             try {
-                // 检查磁盘空间
-                val availableSpace = fileRepository.getAvailableSpace()
-                if (availableSpace < item.remoteSize) {
-                    Logger.w("Sync", "磁盘空间不足: 需要 ${item.remoteSize}B, 可用 ${availableSpace}B")
-                    onTaskFailed(index, "磁盘空间不足")
-                    continue
+                // 先删除原视频释放空间（边删边下模式）
+                val originalFile = java.io.File(localPath)
+                val originalSize = if (originalFile.exists()) originalFile.length() else 0L
+
+                if (originalFile.exists()) {
+                    Logger.i("Sync", "删除原视频释放空间: $localPath (${originalSize}B)")
+                    // 从 MediaStore 删除记录
+                    val localVideoInfo = FileRepository.LocalVideoInfo(
+                        name = item.fileName,
+                        extension = localPath.substringAfterLast('.'),
+                        path = localPath,
+                        size = originalSize,
+                        uri = null
+                    )
+                    fileRepository.deleteLocalVideo(localVideoInfo)
                 }
 
-                // 下载文件到临时路径
-                val tempPath = "$targetPath.tmp"
-                val tempFile = java.io.File(tempPath)
-                val outputStream = tempFile.outputStream()
+                // 下载新视频到目标路径
+                val outputStream = java.io.File(targetPath).outputStream()
 
-                Logger.i("Sync", "开始下载: $remotePath -> $tempPath")
+                Logger.i("Sync", "开始下载: $remotePath -> $targetPath")
 
                 val downloadSuccess = smbManager.downloadFile(
                     remotePath = remotePath,
@@ -2328,7 +2335,8 @@ private suspend fun startSyncWithPreview(
 
                 if (!downloadSuccess) {
                     Logger.e("Sync", "下载失败: ${item.fileName}")
-                    tempFile.delete()
+                    // 删除可能部分下载的文件
+                    java.io.File(targetPath).delete()
                     onTaskFailed(index, "下载失败")
                     continue
                 }
@@ -2338,45 +2346,21 @@ private suspend fun startSyncWithPreview(
                 // 防丢校验 - 严格比对文件大小
                 onTaskVerifying(index)
 
-                val localDownloadedSize = tempFile.length()
+                val downloadedFile = java.io.File(targetPath)
+                val localDownloadedSize = downloadedFile.length()
                 val remoteFileSize = item.remoteSize
 
                 Logger.d("Sync", "开始完整性校验: 远端=${remoteFileSize}B, 本地=${localDownloadedSize}B")
 
                 if (localDownloadedSize != remoteFileSize) {
+                    // 大小不一致，删除下载的文件
                     Logger.e("Sync", "完整性校验失败! 文件大小不一致: ${item.fileName}")
-                    tempFile.delete()
+                    downloadedFile.delete()
                     onTaskFailed(index, "校验失败：远端${remoteFileSize}B，本地${localDownloadedSize}B")
                     continue
                 }
 
                 Logger.i("Sync", "完整性校验通过: ${item.fileName}")
-
-                // 校验通过，重命名临时文件为目标文件
-                val targetFile = java.io.File(targetPath)
-                if (targetFile.exists()) targetFile.delete()
-                val renameSuccess = tempFile.renameTo(targetFile)
-                if (!renameSuccess) {
-                    Logger.e("Sync", "文件重命名失败: $targetPath")
-                    tempFile.delete()
-                    onTaskFailed(index, "文件重命名失败")
-                    continue
-                }
-
-                // 删除原视频
-                val localVideoInfo = FileRepository.LocalVideoInfo(
-                    name = item.fileName,
-                    extension = localPath.substringAfterLast('.'),
-                    path = localPath,
-                    size = item.localSize,
-                    uri = null
-                )
-                val deleteSuccess = fileRepository.deleteLocalVideo(localVideoInfo)
-                if (!deleteSuccess) {
-                    Logger.w("Sync", "原视频删除失败: $localPath")
-                } else {
-                    Logger.i("Sync", "原视频已删除: $localPath")
-                }
 
                 // 触发媒体库扫描
                 fileRepository.triggerMediaScan(targetPath)
@@ -2387,8 +2371,9 @@ private suspend fun startSyncWithPreview(
             } catch (e: Exception) {
                 Logger.e("Sync", "处理任务异常: ${item.fileName}", e)
                 e.printStackTrace()
-                val tempFile = java.io.File("$targetPath.tmp")
-                if (tempFile.exists()) tempFile.delete()
+                // 删除可能部分下载的文件
+                val downloadedFile = java.io.File(targetPath)
+                if (downloadedFile.exists()) downloadedFile.delete()
                 onTaskFailed(index, e.message ?: "未知错误")
             }
         }
