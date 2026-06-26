@@ -8,6 +8,9 @@
 # Kotlin 协程
 -keepnames class kotlinx.coroutines.** { *; }
 
+# 忽略 R8 缺少类警告
+-ignorewarnings
+
 # SMBJ 依赖的类
 -dontwarn javax.el.**
 -dontwarn net.engio.mbassy.**
@@ -15,10 +18,10 @@
 -dontwarn javax.annotation.**
 -dontwarn org.apache.commons.**
 -dontwarn sun.misc.**
-
-# Bouncy Castle JNDI 依赖（Android 不可用）
 -dontwarn javax.naming.**
--keep class javax.naming.** { *; }
+-dontwarn javax.sql.**
+-dontwarn org.xmlpull.**
+-dontwarn org.slf4j.**
 
 # 保留 SMBJ 相关的反射类
 -keep class net.engio.mbassy.** { *; }
