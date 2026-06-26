@@ -106,7 +106,6 @@ import com.videosync.app.data.FileRepository
 import com.videosync.app.data.NasConfig
 import com.videosync.app.data.SettingsDataStore
 import com.videosync.app.data.SmbManager
-import com.videosync.app.service.SyncForegroundService
 import com.videosync.app.ui.theme.StatusConnected
 import com.videosync.app.ui.theme.StatusDisconnected
 import com.videosync.app.ui.theme.StatusSyncing
@@ -356,8 +355,6 @@ fun MainScreen() {
                             isSyncing = false
                             isPaused = false
                             pendingSyncItems = emptyList()
-                            // 停止前台服务
-                            SyncForegroundService.stop(context)
                             scope.launch {
                                 smbManager.disconnect()
                                 snackbarHostState.showSnackbar("同步已停止")
@@ -383,8 +380,6 @@ fun MainScreen() {
                         pendingSyncItems = emptyList()
                         transferTasks.clear()
                         currentTaskIndex = -1
-                        // 启动前台服务
-                        SyncForegroundService.start(context)
                         scope.launch {
                             startSyncWithPreview(
                                 nasHost = nasHost,
@@ -448,8 +443,6 @@ fun MainScreen() {
                                     isPaused = false
                                     pendingSyncItems = emptyList()
                                     currentTaskIndex = -1
-                                    // 停止前台服务
-                                    SyncForegroundService.stop(context)
                                 },
                                 onError = { error ->
                                     isSyncing = false
@@ -805,8 +798,6 @@ fun MainScreen() {
                 isPaused = false
                 transferTasks.clear()
                 currentTaskIndex = -1
-                // 启动前台服务
-                SyncForegroundService.start(context)
                 val selectedPreviewItems = syncPreviewItems.filterIndexed { index, _ -> index in selectedItems }
                 scope.launch {
                     startSyncWithPreview(
@@ -836,15 +827,6 @@ fun MainScreen() {
                         },
                         onTaskStart = { index ->
                             currentTaskIndex = index
-                            // 更新通知进度
-                            val task = transferTasks.getOrNull(index)
-                            SyncForegroundService.updateProgress(
-                                context = context,
-                                currentFile = task?.fileName ?: "",
-                                progress = 0f,
-                                currentIndex = index + 1,
-                                totalCount = transferTasks.size
-                            )
                         },
                         onTaskProgress = { index, progress, downloadedSize ->
                             if (index in transferTasks.indices) {
@@ -852,14 +834,6 @@ fun MainScreen() {
                                     progress = progress,
                                     downloadedSize = downloadedSize,
                                     status = TaskStatus.DOWNLOADING
-                                )
-                                // 更新通知进度
-                                SyncForegroundService.updateProgress(
-                                    context = context,
-                                    currentFile = transferTasks[index].fileName,
-                                    progress = progress,
-                                    currentIndex = index + 1,
-                                    totalCount = transferTasks.size
                                 )
                             }
                         },
@@ -892,8 +866,6 @@ fun MainScreen() {
                             isPaused = false
                             pendingSyncItems = emptyList()
                             currentTaskIndex = -1
-                            // 停止前台服务
-                            SyncForegroundService.stop(context)
                         },
                         onError = { error ->
                             isSyncing = false

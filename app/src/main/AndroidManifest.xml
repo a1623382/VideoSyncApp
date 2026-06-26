@@ -19,14 +19,6 @@
     <!-- 电池优化忽略权限，确保后台同步不被系统杀死 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- 前台服务权限，用于长时间同步任务 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- 通知权限 - Android 13+ -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
     <application
         android:name=".VideoSyncApplication"
         android:allowBackup="true"
@@ -58,12 +50,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-
-        <!-- 同步前台服务 -->
-        <service
-            android:name=".service.SyncForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>
