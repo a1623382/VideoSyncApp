@@ -201,18 +201,21 @@ class FileRepository(private val context: Context) {
      * 匹配逻辑：
      * - HEVC/VP9/AV1 编码的视频 → 匹配原格式文件（NAS 上保持原样）
      * - H.264/MPEG-4 等其他编码 → 匹配 MKV 文件（NAS 转码后的）
+     * - 如果文件后缀和大小完全一致 → 跳过（已是同一文件）
      *
      * @param localPath 本地视频完整路径
      * @param localName 本地视频基础名（不含扩展名）
      * @param localExtension 本地视频扩展名
+     * @param localSize 本地视频文件大小
      * @param localCodec 本地视频编码格式
      * @param remoteFiles 远端文件列表
-     * @return 匹配的远端文件信息，null 表示无匹配
+     * @return 匹配的远端文件信息，null 表示无匹配或无需替换
      */
     fun findMatchingRemoteFile(
         localPath: String,
         localName: String,
         localExtension: String,
+        localSize: Long,
         localCodec: String,
         remoteFiles: List<RemoteFileInfo>
     ): RemoteFileInfo? {
@@ -240,8 +243,20 @@ class FileRepository(private val context: Context) {
 
         if (candidates.isEmpty()) return null
 
+        // 过滤掉后缀和大小完全一致的文件（说明已是同一文件，无需替换）
+        val filteredCandidates = candidates.filter { remote ->
+            val remoteExtension = remote.name.substringAfterLast('.').lowercase()
+            val isSameFile = remoteExtension == localExtension.lowercase() && remote.size == localSize
+            if (isSameFile) {
+                Logger.d("FileRepository", "跳过相同文件: $localName (后缀相同，大小一致: ${localSize}B)")
+            }
+            !isSameFile
+        }
+
+        if (filteredCandidates.isEmpty()) return null
+
         // 计算每个候选文件的目录相似性得分
-        val scoredCandidates = candidates.map { remote ->
+        val scoredCandidates = filteredCandidates.map { remote ->
             val remoteParentDir = remote.path.substringBeforeLast('/').substringAfterLast('/')
             val similarity = calculateDirectorySimilarity(localParentDir, remoteParentDir)
             Pair(remote, similarity)
