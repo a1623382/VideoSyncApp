@@ -20,16 +20,25 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: 设置 Gradle
-      uses: gradle/actions/setup-gradle@v3
+    - name: 缓存 Gradle 依赖
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: 授予 Gradle 执行权限
+      run: chmod +x gradlew
 
     - name: 构建 Debug APK
-      run: gradle assembleDebug
+      run: ./gradlew assembleDebug
 
     - name: 构建 Release APK
-      run: gradle assembleRelease
+      run: ./gradlew assembleRelease
 
     - name: 上传 Debug APK
       uses: actions/upload-artifact@v4
