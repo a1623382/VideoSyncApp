@@ -354,7 +354,9 @@ fun MainScreen() {
 
                                 // 获取远端文件列表（递归包含子目录）
                                 snackbarHostState.showSnackbar("正在获取远端文件列表...")
-                                val remoteFiles = smbManager.listFilesRecursively(remotePath.ifEmpty { "/" })
+                                val scanPath = remotePath.ifEmpty { "/" }
+                                Logger.i("Preview", "开始扫描远端目录: $scanPath")
+                                val remoteFiles = smbManager.listFilesRecursively(scanPath)
                                 Logger.i("Preview", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
 
                                 // 查找匹配项

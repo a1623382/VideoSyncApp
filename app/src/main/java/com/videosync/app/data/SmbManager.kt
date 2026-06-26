@@ -173,9 +173,21 @@ class SmbManager {
         maxDepth: Int = 20
     ): List<RemoteFileInfo> = withContext(Dispatchers.IO) {
         val result = mutableListOf<RemoteFileInfo>()
+        var dirCount = 0
+        var fileCount = 0
+
         try {
             val currentShare = share ?: return@withContext result
-            val entries = currentShare.list(directoryPath)
+
+            // 标准化路径
+            val normalizedPath = directoryPath.replace("\\", "/").let {
+                if (it.startsWith("/")) it else "/$it"
+            }
+
+            Logger.d("SmbManager", "开始扫描目录: $normalizedPath (深度: ${20 - maxDepth})")
+
+            val entries = currentShare.list(normalizedPath)
+            Logger.d("SmbManager", "目录 $normalizedPath 包含 ${entries.size} 个条目")
 
             for (entry in entries) {
                 coroutineContext.ensureActive()
@@ -183,13 +195,14 @@ class SmbManager {
                 if (fileName == "." || fileName == "..") continue
 
                 val isDirectory = entry.fileAttributes and FileAttributes.FILE_ATTRIBUTE_DIRECTORY.value != 0L
-                val fullPath = if (directoryPath.endsWith("/")) {
-                    "$directoryPath$fileName"
+                val fullPath = if (normalizedPath.endsWith("/")) {
+                    "$normalizedPath$fileName"
                 } else {
-                    "$directoryPath/$fileName"
+                    "$normalizedPath/$fileName"
                 }
 
                 if (isDirectory) {
+                    dirCount++
                     // 递归列举子目录
                     if (maxDepth > 0) {
                         val subFiles = listFilesRecursively(fullPath, maxDepth - 1)
@@ -198,6 +211,7 @@ class SmbManager {
                         Logger.w("SmbManager", "达到最大递归深度，跳过目录: $fullPath")
                     }
                 } else {
+                    fileCount++
                     result.add(
                         RemoteFileInfo(
                             name = fileName,
@@ -207,9 +221,15 @@ class SmbManager {
                     )
                 }
             }
+
+            Logger.d("SmbManager", "目录 $normalizedPath 扫描完成: $dirCount 个子目录, $fileCount 个文件")
+
         } catch (e: Exception) {
+            Logger.e("SmbManager", "扫描目录失败: $directoryPath", e)
             e.printStackTrace()
         }
+
+        Logger.i("SmbManager", "递归扫描完成，共 ${result.size} 个文件")
         result
     }
 
