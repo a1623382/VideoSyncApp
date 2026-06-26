@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 应用外部文件目录 -->
+    <external-files-path
+        name="external_files"
+        path="." />
+    <!-- 文档目录（用于导出日志） -->
+    <external-path
+        name="documents"
+        path="Documents/VideoSync/" />
+</paths>

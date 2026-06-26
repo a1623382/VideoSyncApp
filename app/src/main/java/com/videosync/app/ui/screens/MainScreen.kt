@@ -46,6 +46,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
@@ -94,6 +96,7 @@ import com.videosync.app.data.SmbManager
 import com.videosync.app.ui.theme.StatusConnected
 import com.videosync.app.ui.theme.StatusDisconnected
 import com.videosync.app.ui.theme.StatusSyncing
+import com.videosync.app.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -226,6 +229,28 @@ fun MainScreen() {
                         text = "视频同步助手",
                         fontWeight = FontWeight.Bold
                     )
+                },
+                actions = {
+                    // 日志导出按钮
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                val logFile = Logger.exportLogs(context)
+                                if (logFile != null) {
+                                    val shareIntent = Logger.createShareIntent(context, logFile)
+                                    context.startActivity(Intent.createChooser(shareIntent, "导出日志"))
+                                    Logger.i("MainScreen", "日志已导出: ${logFile.absolutePath}")
+                                } else {
+                                    snackbarHostState.showSnackbar("日志导出失败")
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "导出日志"
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1042,27 +1067,34 @@ private suspend fun startSync(
     onSyncComplete: () -> Unit,
     onError: (String) -> Unit
 ) {
+    Logger.i("Sync", "开始同步流程 - 服务器: $nasHost, 共享: $shareName, 用户: $username")
+
     // 参数验证
     if (nasHost.isEmpty()) {
+        Logger.w("Sync", "参数验证失败: 服务器地址为空")
         onError("请输入服务器地址")
         return
     }
     if (shareName.isEmpty()) {
+        Logger.w("Sync", "参数验证失败: 共享文件夹为空")
         onError("请输入共享文件夹名称")
         return
     }
     if (username.isEmpty()) {
+        Logger.w("Sync", "参数验证失败: 用户名为空")
         onError("请输入用户名")
         return
     }
 
     // 检查存储权限
     if (!fileRepository.hasStoragePermission()) {
+        Logger.w("Sync", "存储权限未授予")
         onError("请先授予存储权限")
         return
     }
 
     val port = nasPort.toIntOrNull() ?: 445
+    Logger.d("Sync", "解析端口: $port")
 
     try {
         // 保存配置到 DataStore
@@ -1088,18 +1120,22 @@ private suspend fun startSync(
         )
 
         if (!connected) {
+            Logger.e("Sync", "SMB 连接失败 - 服务器: $nasHost:$port")
             onError("无法连接到 NAS，请检查网络和凭据")
             onDisconnected()
             return
         }
 
+        Logger.i("Sync", "SMB 连接成功 - 服务器: $nasHost:$port")
         onConnected()
 
         // 扫描本地视频
         snackbarHostState.showSnackbar("正在扫描本地视频文件...")
         val localVideos = fileRepository.scanAllVideos()
+        Logger.i("Sync", "本地视频扫描完成，共 ${localVideos.size} 个文件")
 
         if (localVideos.isEmpty()) {
+            Logger.w("Sync", "未找到本地视频文件")
             onError("未找到本地视频文件")
             smbManager.disconnect()
             onDisconnected()
@@ -1110,6 +1146,7 @@ private suspend fun startSync(
         // 获取远端文件列表
         snackbarHostState.showSnackbar("正在获取远端文件列表...")
         val remoteFiles = smbManager.listFiles(remotePath)
+        Logger.i("Sync", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
 
         // 查找匹配项并构建任务列表
         val matchQueue = localVideos.mapNotNull { local ->
@@ -1119,6 +1156,7 @@ private suspend fun startSync(
                 remoteFiles = remoteFiles
             )
             if (match != null) {
+                Logger.d("Sync", "找到匹配文件: ${local.name} -> ${match.name}")
                 Pair(local, match)
             } else {
                 null
@@ -1126,12 +1164,15 @@ private suspend fun startSync(
         }
 
         if (matchQueue.isEmpty()) {
+            Logger.w("Sync", "未找到可匹配的高画质文件")
             onError("未找到可匹配的高画质文件")
             smbManager.disconnect()
             onDisconnected()
             onSyncComplete()
             return
         }
+
+        Logger.i("Sync", "找到 ${matchQueue.size} 个匹配文件，开始同步")
 
         // 构建任务列表
         val tasks = matchQueue.map { (local, remote) ->
@@ -1153,9 +1194,12 @@ private suspend fun startSync(
             onTaskStart(index)
 
             try {
+                Logger.d("Sync", "开始处理任务 [$index]: ${localVideo.name}")
+
                 // 检查磁盘空间
                 val availableSpace = fileRepository.getAvailableSpace()
                 if (availableSpace < remoteFile.size) {
+                    Logger.w("Sync", "磁盘空间不足: 需要 ${remoteFile.size}B, 可用 ${availableSpace}B")
                     onTaskFailed(index, "磁盘空间不足")
                     continue
                 }
@@ -1164,6 +1208,8 @@ private suspend fun startSync(
                 val tempPath = "$targetPath.tmp"
                 val tempFile = java.io.File(tempPath)
                 val outputStream = tempFile.outputStream()
+
+                Logger.i("Sync", "开始下载: ${remoteFile.path} -> $tempPath")
 
                 val downloadSuccess = smbManager.downloadFile(
                     remotePath = remoteFile.path,
@@ -1178,10 +1224,13 @@ private suspend fun startSync(
                 outputStream.close()
 
                 if (!downloadSuccess) {
+                    Logger.e("Sync", "下载失败: ${localVideo.name}")
                     tempFile.delete()
                     onTaskFailed(index, "下载失败")
                     continue
                 }
+
+                Logger.i("Sync", "下载完成: ${localVideo.name}")
 
                 // 防丢校验 - 严格比对文件大小
                 onTaskVerifying(index)
@@ -1189,18 +1238,24 @@ private suspend fun startSync(
                 val localDownloadedSize = tempFile.length()
                 val remoteFileSize = remoteFile.size
 
+                Logger.d("Sync", "开始完整性校验: 远端=${remoteFileSize}B, 本地=${localDownloadedSize}B")
+
                 if (localDownloadedSize != remoteFileSize) {
                     // 大小不一致，严禁删除原视频
+                    Logger.e("Sync", "完整性校验失败! 文件大小不一致: ${localVideo.name}")
                     tempFile.delete()
                     onTaskFailed(index, "校验失败：远端${remoteFileSize}B，本地${localDownloadedSize}B")
                     continue
                 }
+
+                Logger.i("Sync", "完整性校验通过: ${localVideo.name}")
 
                 // 校验通过，重命名临时文件为目标文件
                 val targetFile = java.io.File(targetPath)
                 if (targetFile.exists()) targetFile.delete()
                 val renameSuccess = tempFile.renameTo(targetFile)
                 if (!renameSuccess) {
+                    Logger.e("Sync", "文件重命名失败: $targetPath")
                     tempFile.delete()
                     onTaskFailed(index, "文件重命名失败")
                     continue
@@ -1209,15 +1264,20 @@ private suspend fun startSync(
                 // 删除原视频
                 val deleteSuccess = fileRepository.deleteLocalVideo(localVideo)
                 if (!deleteSuccess) {
+                    Logger.w("Sync", "原视频删除失败: ${localVideo.path}")
                     snackbarHostState.showSnackbar("警告：原视频删除失败，请手动处理")
+                } else {
+                    Logger.i("Sync", "原视频已删除: ${localVideo.path}")
                 }
 
                 // 触发媒体库扫描
                 fileRepository.triggerMediaScan(targetPath)
+                Logger.i("Sync", "任务完成: ${localVideo.name}")
 
                 onTaskComplete(index)
 
             } catch (e: Exception) {
+                Logger.e("Sync", "处理任务异常: ${localVideo.name}", e)
                 e.printStackTrace()
                 val tempFile = java.io.File("$targetPath.tmp")
                 if (tempFile.exists()) tempFile.delete()
@@ -1227,13 +1287,16 @@ private suspend fun startSync(
 
         // 同步完成
         val completedCount = tasks.count { it.status == TaskStatus.COMPLETED }
+        Logger.i("Sync", "同步流程完成: 成功 $completedCount/${tasks.size}")
         snackbarHostState.showSnackbar("同步完成，成功处理 $completedCount/${tasks.size} 个文件")
 
     } catch (e: Exception) {
+        Logger.e("Sync", "同步过程异常", e)
         onError("同步过程出错：${e.message}")
     } finally {
         smbManager.disconnect()
         onDisconnected()
         onSyncComplete()
+        Logger.i("Sync", "同步流程结束，连接已断开")
     }
 }

@@ -86,10 +86,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // SMBJ 库用于 SMB 协议连接
-    implementation("com.hierynomus:smbj:0.13.0")
-
-    // Bouncy Castle 加密依赖 (SMBJ 需要)
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+    implementation("com.hierynomus:smbj:0.13.0") {
+        // 排除冲突的 BouncyCastle 依赖
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15on")
+    }
 
     // 测试依赖
     testImplementation("junit:junit:4.13.2")
