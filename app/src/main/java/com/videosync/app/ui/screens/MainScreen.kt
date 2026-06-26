@@ -553,25 +553,6 @@ fun MainScreen() {
                 }
             }
         }
-                containerColor = if (isSyncing) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primaryContainer
-                },
-                contentColor = if (isSyncing) {
-                    MaterialTheme.colorScheme.onError
-                } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                }
-            ) {
-                Icon(
-                    imageVector = if (isSyncing) Icons.Default.Stop else Icons.Default.PlayArrow,
-                    contentDescription = if (isSyncing) "停止同步" else "开始同步"
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = if (isSyncing) "停止同步" else "开始同步")
-            }
-        }
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
