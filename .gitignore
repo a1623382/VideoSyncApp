@@ -29,6 +29,7 @@ local.properties
 *.war
 *.ear
 *.nar
+!gradle/wrapper/gradle-wrapper.jar
 
 # Logs
 *.log
