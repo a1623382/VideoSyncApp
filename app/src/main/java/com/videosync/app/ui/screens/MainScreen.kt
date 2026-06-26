@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
@@ -200,8 +202,12 @@ fun MainScreen() {
     // 连接与同步状态
     var isConnected by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
+    var isPaused by remember { mutableStateOf(false) }
     var hasStoragePermission by remember { mutableStateOf(false) }
     var isIgnoringBatteryOptimization by remember { mutableStateOf(false) }
+
+    // 暂停时保存的待处理任务（用于继续同步）
+    var pendingSyncItems by remember { mutableStateOf<List<SyncPreviewItem>>(emptyList()) }
 
     // 电池优化请求启动器
     val batteryOptimizationLauncher = rememberLauncherForActivityResult(
@@ -311,18 +317,149 @@ fun MainScreen() {
             )
         },
         floatingActionButton = {
-            // 主操作按钮 - 开始/停止同步
-            ExtendedFloatingActionButton(
-                onClick = {
-                    if (isSyncing) {
-                        // 停止同步
-                        isSyncing = false
-                        scope.launch {
-                            smbManager.disconnect()
-                            snackbarHostState.showSnackbar("同步已停止")
+            // 同步控制按钮组
+            if (isSyncing) {
+                // 同步中：显示暂停/继续和停止按钮
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 暂停/继续按钮
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            isPaused = !isPaused
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    if (isPaused) "将在当前文件完成后暂停" else "继续同步"
+                                )
+                            }
+                        },
+                        containerColor = if (isPaused) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.tertiaryContainer
                         }
-                    } else {
-                        // 扫描并显示预览对话框
+                    ) {
+                        Icon(
+                            imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pending,
+                            contentDescription = if (isPaused) "继续" else "暂停"
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (isPaused) "继续" else "暂停")
+                    }
+                    // 停止按钮
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            isSyncing = false
+                            isPaused = false
+                            pendingSyncItems = emptyList()
+                            scope.launch {
+                                smbManager.disconnect()
+                                snackbarHostState.showSnackbar("同步已停止")
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "停止"
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("停止")
+                    }
+                }
+            } else if (pendingSyncItems.isNotEmpty()) {
+                // 有暂停的任务：显示继续按钮
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        isSyncing = true
+                        isPaused = false
+                        val itemsToResume = pendingSyncItems.toList()
+                        pendingSyncItems = emptyList()
+                        transferTasks.clear()
+                        currentTaskIndex = -1
+                        scope.launch {
+                            startSyncWithPreview(
+                                nasHost = nasHost,
+                                nasPort = nasPort,
+                                shareName = shareName,
+                                username = username,
+                                password = password,
+                                smbManager = smbManager,
+                                fileRepository = fileRepository,
+                                settingsDataStore = settingsDataStore,
+                                snackbarHostState = snackbarHostState,
+                                previewItems = itemsToResume,
+                                isPausedProvider = { isPaused },
+                                onPaused = { remainingItems ->
+                                    isSyncing = false
+                                    pendingSyncItems = remainingItems
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar("已暂停，剩余 ${remainingItems.size} 个文件待处理")
+                                    }
+                                },
+                                onConnected = { isConnected = true },
+                                onDisconnected = { isConnected = false },
+                                onTaskListReady = { tasks ->
+                                    transferTasks.clear()
+                                    transferTasks.addAll(tasks)
+                                },
+                                onTaskStart = { index -> currentTaskIndex = index },
+                                onTaskProgress = { index, progress, downloadedSize ->
+                                    if (index in transferTasks.indices) {
+                                        transferTasks[index] = transferTasks[index].copy(
+                                            progress = progress,
+                                            downloadedSize = downloadedSize,
+                                            status = TaskStatus.DOWNLOADING
+                                        )
+                                    }
+                                },
+                                onTaskVerifying = { index ->
+                                    if (index in transferTasks.indices) {
+                                        transferTasks[index] = transferTasks[index].copy(status = TaskStatus.VERIFYING)
+                                    }
+                                },
+                                onTaskComplete = { index ->
+                                    if (index in transferTasks.indices) {
+                                        transferTasks[index] = transferTasks[index].copy(
+                                            progress = 100f,
+                                            downloadedSize = transferTasks[index].remoteSize,
+                                            status = TaskStatus.COMPLETED
+                                        )
+                                    }
+                                },
+                                onTaskFailed = { index, error ->
+                                    if (index in transferTasks.indices) {
+                                        transferTasks[index] = transferTasks[index].copy(
+                                            status = TaskStatus.FAILED,
+                                            errorMessage = error
+                                        )
+                                    }
+                                },
+                                onSyncComplete = {
+                                    isSyncing = false
+                                    isPaused = false
+                                    pendingSyncItems = emptyList()
+                                    currentTaskIndex = -1
+                                },
+                                onError = { error ->
+                                    isSyncing = false
+                                    isPaused = false
+                                    isConnected = false
+                                    scope.launch { snackbarHostState.showSnackbar(error) }
+                                }
+                            )
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "继续同步")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("继续同步 (${pendingSyncItems.size}个)")
+                }
+            } else {
+                // 初始状态：开始扫描按钮
+                ExtendedFloatingActionButton(
+                    onClick = {
                         scope.launch {
                             if (nasHost.isEmpty() || shareName.isEmpty() || username.isEmpty()) {
                                 snackbarHostState.showSnackbar("请先填写服务器地址、共享文件夹和用户名")
@@ -333,14 +470,13 @@ fun MainScreen() {
                                 return@launch
                             }
 
+                            isScanning = true
                             snackbarHostState.showSnackbar("正在扫描匹配文件...")
 
                             try {
-                                // 扫描本地视频
                                 val localVideos = fileRepository.scanAllVideos()
                                 Logger.i("Preview", "本地视频扫描完成，共 ${localVideos.size} 个文件")
 
-                                // 连接 SMB 获取远端文件
                                 val connected = smbManager.connect(
                                     host = nasHost,
                                     port = nasPort.toIntOrNull() ?: 445,
@@ -351,19 +487,18 @@ fun MainScreen() {
 
                                 if (!connected) {
                                     snackbarHostState.showSnackbar("连接 NAS 失败，请检查配置")
+                                    isScanning = false
                                     return@launch
                                 }
 
                                 isConnected = true
 
-                                // 获取远端文件列表（递归包含子目录）
                                 snackbarHostState.showSnackbar("正在获取远端文件列表...")
                                 val scanPath = remotePath.ifEmpty { "/" }
                                 Logger.i("Preview", "开始扫描远端目录: $scanPath")
                                 val remoteFiles = smbManager.listFilesRecursively(scanPath)
                                 Logger.i("Preview", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
 
-                                // 查找匹配项
                                 val previewItems = mutableListOf<SyncPreviewItem>()
                                 for (local in localVideos) {
                                     val match = fileRepository.findMatchingRemoteFile(
@@ -386,13 +521,13 @@ fun MainScreen() {
 
                                 smbManager.disconnect()
                                 isConnected = false
+                                isScanning = false
 
                                 if (previewItems.isEmpty()) {
                                     snackbarHostState.showSnackbar("未找到可匹配的高画质文件")
                                     return@launch
                                 }
 
-                                // 显示预览对话框
                                 syncPreviewItems.clear()
                                 syncPreviewItems.addAll(previewItems)
                                 selectedItems.clear()
@@ -406,10 +541,18 @@ fun MainScreen() {
                                 snackbarHostState.showSnackbar("扫描失败：${e.message}")
                                 smbManager.disconnect()
                                 isConnected = false
+                                isScanning = false
                             }
                         }
-                    }
-                },
+                    },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "开始同步")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("开始同步")
+                }
+            }
+        }
                 containerColor = if (isSyncing) {
                     MaterialTheme.colorScheme.error
                 } else {
@@ -665,6 +808,8 @@ fun MainScreen() {
             },
             onConfirm = {
                 showSyncPreview = false
+                isSyncing = true
+                isPaused = false
                 transferTasks.clear()
                 currentTaskIndex = -1
                 val selectedPreviewItems = syncPreviewItems.filterIndexed { index, _ -> index in selectedItems }
@@ -680,6 +825,14 @@ fun MainScreen() {
                         settingsDataStore = settingsDataStore,
                         snackbarHostState = snackbarHostState,
                         previewItems = selectedPreviewItems,
+                        isPausedProvider = { isPaused },
+                        onPaused = { remainingItems ->
+                            isSyncing = false
+                            pendingSyncItems = remainingItems
+                            scope.launch {
+                                snackbarHostState.showSnackbar("已暂停，剩余 ${remainingItems.size} 个文件待处理")
+                            }
+                        },
                         onConnected = { isConnected = true },
                         onDisconnected = { isConnected = false },
                         onTaskListReady = { tasks ->
@@ -724,10 +877,13 @@ fun MainScreen() {
                         },
                         onSyncComplete = {
                             isSyncing = false
+                            isPaused = false
+                            pendingSyncItems = emptyList()
                             currentTaskIndex = -1
                         },
                         onError = { error ->
                             isSyncing = false
+                            isPaused = false
                             isConnected = false
                             scope.launch {
                                 snackbarHostState.showSnackbar(error)
@@ -2020,8 +2176,10 @@ private suspend fun startSync(
 }
 
 /**
- * 使用预览结果执行同步流程
+ * 使用预览结果执行同步流程（支持暂停/继续）
  * @param previewItems 用户在预览对话框中选择的文件列表
+ * @param isPausedProvider 获取暂停状态的回调
+ * @param onPaused 暂停时回调，传递剩余未处理的任务
  */
 private suspend fun startSyncWithPreview(
     nasHost: String,
@@ -2034,6 +2192,8 @@ private suspend fun startSyncWithPreview(
     settingsDataStore: SettingsDataStore,
     snackbarHostState: SnackbarHostState,
     previewItems: List<SyncPreviewItem>,
+    isPausedProvider: () -> Boolean = { false },
+    onPaused: (List<SyncPreviewItem>) -> Unit = {},
     onConnected: () -> Unit,
     onDisconnected: () -> Unit,
     onTaskListReady: (List<TransferTask>) -> Unit,
@@ -2092,6 +2252,15 @@ private suspend fun startSyncWithPreview(
 
         // 逐个处理任务
         for ((index, item) in previewItems.withIndex()) {
+            // 检查是否暂停 - 当前文件完成后暂停
+            if (index > 0 && isPausedProvider()) {
+                Logger.i("Sync", "用户暂停同步，剩余 ${previewItems.size - index} 个文件待处理")
+                val remainingItems = previewItems.subList(index, previewItems.size).toList()
+                onPaused(remainingItems)
+                onSyncComplete()
+                return
+            }
+
             val localPath = item.localPath
             val remotePath = item.remotePath
             val targetPath = "${localPath.substringBeforeLast('/')}/${item.fileName}.${remotePath.substringAfterLast('.')}"
