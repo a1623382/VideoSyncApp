@@ -187,7 +187,6 @@ class SmbManager {
             val inputStream: InputStream = remoteFile.inputStream
 
             // 通过 DiskShare 获取文件大小
-            val currentShare = share ?: throw IllegalStateException("共享未连接")
             val fileInfo = currentShare.getFileInformation(remotePath)
             val fileSize = fileInfo.standardInformation.endOfFile
 
