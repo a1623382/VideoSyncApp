@@ -16,6 +16,10 @@
 -dontwarn org.apache.commons.**
 -dontwarn sun.misc.**
 
+# Bouncy Castle JNDI 依赖（Android 不可用）
+-dontwarn javax.naming.**
+-keep class javax.naming.** { *; }
+
 # 保留 SMBJ 相关的反射类
 -keep class net.engio.mbassy.** { *; }
 -keep class javax.el.** { *; }
