@@ -507,6 +507,7 @@ fun MainScreen() {
                                         localPath = local.path,
                                         localName = local.name,
                                         localExtension = local.extension,
+                                        localCodec = local.codec,
                                         remoteFiles = remoteFiles
                                     )
                                     if (match != null) {
@@ -2074,6 +2075,7 @@ private suspend fun startSync(
                 localPath = local.path,
                 localName = local.name,
                 localExtension = local.extension,
+                localCodec = local.codec,
                 remoteFiles = remoteFiles
             )
             if (match != null) {
