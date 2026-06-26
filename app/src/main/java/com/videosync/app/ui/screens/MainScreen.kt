@@ -167,7 +167,7 @@ fun MainScreen() {
 
     // 远端目录浏览器状态
     var showDirBrowser by remember { mutableStateOf(false) }
-    var remoteDirectories by remember { mutableStateListOf<String>() }
+    val remoteDirectories = remember { mutableStateListOf<String>() }
     var isLoadingDirectories by remember { mutableStateOf(false) }
 
     // 连接与同步状态
@@ -526,7 +526,7 @@ fun MainScreen() {
                             shareName = shareName
                         )
                         if (connected) {
-                            val dirs = smbManager.listDirectories(selectedPath)
+                            val dirs = smbManager.listDirectories(remotePath.ifEmpty { "/" })
                             remoteDirectories.clear()
                             remoteDirectories.addAll(dirs)
                             smbManager.disconnect()
