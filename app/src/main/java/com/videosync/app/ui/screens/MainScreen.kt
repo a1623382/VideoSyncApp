@@ -850,6 +850,527 @@ private fun BatteryOptimizationCard(
 }
 
 /**
+ * 连接状态卡片
+ */
+@Composable
+private fun ConnectionStatusCard(
+    isConnected: Boolean,
+    isSyncing: Boolean,
+    nasHost: String,
+    taskCount: Int,
+    completedCount: Int
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = when {
+                isSyncing -> StatusSyncing.copy(alpha = 0.1f)
+                isConnected -> StatusConnected.copy(alpha = 0.1f)
+                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isConnected) Icons.Default.Cloud else Icons.Default.CloudOff,
+                contentDescription = null,
+                tint = when {
+                    isSyncing -> StatusSyncing
+                    isConnected -> StatusConnected
+                    else -> StatusDisconnected
+                },
+                modifier = Modifier.size(40.dp)
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        isSyncing -> "同步中..."
+                        isConnected -> "已连接"
+                        else -> "未连接"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (nasHost.isNotEmpty()) {
+                    Text(
+                        text = "目标：$nasHost",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (taskCount > 0) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "$completedCount/$taskCount",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "已完成",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 整体进度卡片
+ */
+@Composable
+private fun OverallProgressCard(
+    tasks: List<TransferTask>,
+    currentIndex: Int
+) {
+    val completedCount = tasks.count { it.status == TaskStatus.COMPLETED }
+    val totalCount = tasks.size
+    val overallProgress = if (totalCount > 0) {
+        completedCount.toFloat() / totalCount * 100
+    } else 0f
+
+    val currentTask = if (currentIndex in tasks.indices) tasks[currentIndex] else null
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = StatusSyncing.copy(alpha = 0.1f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "同步进度",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "总进度",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "${String.format("%.1f", overallProgress)}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = overallProgress / 100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = StatusSyncing,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = StrokeCap.Round
+                )
+            }
+
+            if (currentTask != null && currentTask.status == TaskStatus.DOWNLOADING) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "当前文件",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${String.format("%.1f", currentTask.progress)}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = currentTask.progress / 100f,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        strokeCap = StrokeCap.Round
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "已下载: ${formatFileSize(currentTask.downloadedSize)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "总计: ${formatFileSize(currentTask.remoteSize)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                StatusChip(
+                    count = tasks.count { it.status == TaskStatus.PENDING },
+                    label = "等待中",
+                    color = MaterialTheme.colorScheme.outline
+                )
+                StatusChip(
+                    count = tasks.count { it.status in listOf(TaskStatus.DOWNLOADING, TaskStatus.VERIFYING) },
+                    label = "传输中",
+                    color = StatusSyncing
+                )
+                StatusChip(
+                    count = tasks.count { it.status == TaskStatus.COMPLETED },
+                    label = "已完成",
+                    color = StatusConnected
+                )
+                StatusChip(
+                    count = tasks.count { it.status == TaskStatus.FAILED },
+                    label = "失败",
+                    color = StatusDisconnected
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 状态统计小标签
+ */
+@Composable
+private fun StatusChip(
+    count: Int,
+    label: String,
+    color: Color
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(
+                    color = color.copy(alpha = 0.1f),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 单个传输任务项
+ */
+@Composable
+private fun TransferTaskItem(
+    task: TransferTask,
+    index: Int,
+    isActive: Boolean
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = when (task.status) {
+                        TaskStatus.PENDING -> Icons.Default.Pending
+                        TaskStatus.DOWNLOADING -> Icons.Default.Sync
+                        TaskStatus.VERIFYING -> Icons.Default.Sync
+                        TaskStatus.COMPLETED -> Icons.Default.CheckCircle
+                        TaskStatus.FAILED -> Icons.Default.Error
+                    },
+                    contentDescription = null,
+                    tint = when (task.status) {
+                        TaskStatus.PENDING -> MaterialTheme.colorScheme.outline
+                        TaskStatus.DOWNLOADING -> StatusSyncing
+                        TaskStatus.VERIFYING -> StatusSyncing
+                        TaskStatus.COMPLETED -> StatusConnected
+                        TaskStatus.FAILED -> StatusDisconnected
+                    },
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = task.fileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = when (task.status) {
+                            TaskStatus.PENDING -> "等待传输"
+                            TaskStatus.DOWNLOADING -> "下载中"
+                            TaskStatus.VERIFYING -> "校验中"
+                            TaskStatus.COMPLETED -> "已完成"
+                            TaskStatus.FAILED -> "失败：${task.errorMessage}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when (task.status) {
+                            TaskStatus.FAILED -> StatusDisconnected
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (task.status == TaskStatus.DOWNLOADING) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = task.progress / 100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = StatusSyncing,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = StrokeCap.Round
+                )
+            }
+
+            if (task.status != TaskStatus.PENDING) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "本地: ${formatFileSize(task.localSize)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "远端: ${formatFileSize(task.remoteSize)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 远端目录浏览器对话框
+ */
+@Composable
+private fun RemoteDirBrowserDialog(
+    currentPath: String,
+    directories: List<String>,
+    isLoading: Boolean,
+    onSelect: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onNavigateUp: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = "选择目录",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "当前路径：$currentPath",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            strokeCap = StrokeCap.Round
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("加载中...")
+                    }
+                }
+            } else if (directories.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "此目录下没有子目录",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (currentPath != "/") {
+                        item {
+                            val parentPath = currentPath.trimEnd('/').substringBeforeLast('/').ifEmpty { "/" }
+                            ListItem(
+                                headlineContent = { Text(".. 返回上级") },
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onNavigateUp(parentPath) }
+                            )
+                        }
+                    }
+
+                    items(directories) { dir ->
+                        val fullPath = if (currentPath.endsWith("/")) {
+                            "$currentPath$dir"
+                        } else {
+                            "$currentPath/$dir"
+                        }
+                        ListItem(
+                            headlineContent = { Text(dir) },
+                            leadingContent = {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            trailingContent = {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "选择",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onNavigateUp(fullPath) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSelect(currentPath) }
+            ) {
+                Text("选择当前目录")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onRefresh) {
+                    Text("刷新")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        }
+    )
+}
+
+/**
+ * 格式化文件大小显示
+ */
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "${bytes}B"
+        bytes < 1024 * 1024 -> "${bytes / 1024}KB"
+        bytes < 1024 * 1024 * 1024 -> String.format("%.1fMB", bytes / (1024.0 * 1024.0))
+        else -> String.format("%.2fGB", bytes / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/**
  * NAS 配置表单
  * 包含服务器地址、共享文件夹、用户名、密码、远端路径
  */
