@@ -120,7 +120,7 @@ class SmbManager {
      * 检查是否已连接
      */
     fun isConnected(): Boolean {
-        return share != null && session?.isConnected == true
+        return share != null && session != null && connection != null
     }
 
     /**
@@ -185,7 +185,7 @@ class SmbManager {
             )
 
             val inputStream: InputStream = remoteFile.inputStream
-            val fileSize = remoteFile.fileStandardInformation.endOfFile
+            val fileSize = remoteFile.length
 
             // 缓冲区读写
             val buffer = ByteArray(8192)
@@ -233,7 +233,7 @@ class SmbManager {
         try {
             val currentShare = share ?: return@withContext -1L
             val info = currentShare.getFileInformation(filePath)
-            info.standardInformation.endOfFile
+            info.endOfFile
         } catch (e: Exception) {
             -1L
         }

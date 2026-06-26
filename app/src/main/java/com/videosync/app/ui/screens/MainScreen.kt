@@ -783,7 +783,7 @@ private fun OverallProgressCard(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = { overallProgress / 100f },
+                    progress = overallProgress / 100f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(8.dp)
@@ -817,7 +817,7 @@ private fun OverallProgressCard(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     LinearProgressIndicator(
-                        progress = { currentTask.progress / 100f },
+                        progress = currentTask.progress / 100f,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
@@ -995,7 +995,7 @@ private fun TransferTaskItem(
             if (task.status == TaskStatus.DOWNLOADING) {
                 Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
-                    progress = { task.progress / 100f },
+                    progress = task.progress / 100f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)
