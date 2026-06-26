@@ -69,7 +69,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -81,7 +80,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -193,7 +191,7 @@ fun MainScreen() {
     // 同步预览对话框状态
     var showSyncPreview by remember { mutableStateOf(false) }
     val syncPreviewItems = remember { mutableStateListOf<SyncPreviewItem>() }
-    val selectedItems = remember { mutableStateSetOf<Int>() }
+    val selectedItems = remember { mutableStateListOf<Int>() }
 
     // 连接与同步状态
     var isConnected by remember { mutableStateOf(false) }
@@ -1067,7 +1065,14 @@ private fun SyncPreviewDialog(
                     )
                 }
 
-                HorizontalDivider()
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
 
                 // 文件列表
                 LazyColumn(

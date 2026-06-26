@@ -163,13 +163,14 @@ class SmbManager {
 
     /**
      * 递归列举远端目录下所有文件（包括子目录）
+     * 支持深层目录结构，如 \MobileBackup\PJZ110\2026\6
      * @param directoryPath 目录路径
-     * @param maxDepth 最大递归深度（防止无限递归）
+     * @param maxDepth 最大递归深度（防止无限递归，默认20层）
      * @return 所有文件信息列表
      */
     suspend fun listFilesRecursively(
         directoryPath: String,
-        maxDepth: Int = 10
+        maxDepth: Int = 20
     ): List<RemoteFileInfo> = withContext(Dispatchers.IO) {
         val result = mutableListOf<RemoteFileInfo>()
         try {
@@ -193,6 +194,8 @@ class SmbManager {
                     if (maxDepth > 0) {
                         val subFiles = listFilesRecursively(fullPath, maxDepth - 1)
                         result.addAll(subFiles)
+                    } else {
+                        Logger.w("SmbManager", "达到最大递归深度，跳过目录: $fullPath")
                     }
                 } else {
                     result.add(
