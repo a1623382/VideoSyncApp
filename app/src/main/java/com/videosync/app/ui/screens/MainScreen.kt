@@ -191,10 +191,11 @@ fun MainScreen() {
     val remoteDirectories = remember { mutableStateListOf<String>() }
     var isLoadingDirectories by remember { mutableStateOf(false) }
 
-    // 同步预览对话框状态
+    // 同步预览界面状态（独立页面）
     var showSyncPreview by remember { mutableStateOf(false) }
     val syncPreviewItems = remember { mutableStateListOf<SyncPreviewItem>() }
     val selectedItems = remember { mutableStateListOf<Int>() }
+    var isScanning by remember { mutableStateOf(false) }
 
     // 连接与同步状态
     var isConnected by remember { mutableStateOf(false) }
@@ -642,9 +643,9 @@ fun MainScreen() {
         )
     }
 
-    // 同步预览对话框
+    // 同步预览界面（独立页面）
     if (showSyncPreview) {
-        SyncPreviewDialog(
+        SyncPreviewScreen(
             items = syncPreviewItems,
             selectedIndices = selectedItems,
             onToggleSelection = { index ->
@@ -664,7 +665,6 @@ fun MainScreen() {
             },
             onConfirm = {
                 showSyncPreview = false
-                // 开始同步选中的任务
                 transferTasks.clear()
                 currentTaskIndex = -1
                 val selectedPreviewItems = syncPreviewItems.filterIndexed { index, _ -> index in selectedItems }
@@ -736,7 +736,7 @@ fun MainScreen() {
                     )
                 }
             },
-            onDismiss = { showSyncPreview = false }
+            onBack = { showSyncPreview = false }
         )
     }
 }
@@ -1531,18 +1531,19 @@ private fun NasConfigForm(
 }
 
 /**
- * 同步预览对话框
+ * 同步预览界面（独立全屏页面）
  * 显示匹配的视频列表，支持选择性处理
- * 包含搜索过滤、总大小统计和清晰的路径对比显示
+ * 包含搜索过滤、总大小统计和清晰的左右对照表格显示
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SyncPreviewDialog(
+private fun SyncPreviewScreen(
     items: List<SyncPreviewItem>,
     selectedIndices: List<Int>,
     onToggleSelection: (Int) -> Unit,
     onSelectAll: () -> Unit,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onBack: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
@@ -1552,225 +1553,210 @@ private fun SyncPreviewDialog(
     val filteredItems = if (searchQuery.isEmpty()) items
     else items.filter { it.fileName.contains(searchQuery, ignoreCase = true) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "同步预览",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "已选 ${selectedIndices.size}/${items.size}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "共需下载 ${formatFileSize(selectedTotalSize)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        text = {
-            Column {
-                // 搜索框
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("搜索文件名...") },
-                    leadingIcon = {
-                        Icon(Icons.Default.Search, contentDescription = null)
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "清除")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 全选/取消全选按钮和统计
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onSelectAll() }
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = selectedIndices.size == items.size && items.isNotEmpty(),
-                        onCheckedChange = { onSelectAll() }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (selectedIndices.size == items.size && items.isNotEmpty()) "取消全选" else "全选",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        text = "${filteredItems.size} 个文件",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(MaterialTheme.colorScheme.outlineVariant)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // 表头
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(modifier = Modifier.width(32.dp)) // checkbox 占位
-                    Text(
-                        text = "文件名",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(0.3f)
-                    )
-                    Text(
-                        text = "本地路径",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(0.3f)
-                    )
-                    Text(
-                        text = "远端路径",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(0.3f)
-                    )
-                    Text(
-                        text = "大小",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(0.1f),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.End
-                    )
-                }
-
-                // 文件列表
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 500.dp)
-                ) {
-                    itemsIndexed(filteredItems) { displayIndex, item ->
-                        val originalIndex = if (searchQuery.isEmpty()) displayIndex
-                        else items.indexOf(item)
-                        val isSelected = originalIndex in selectedIndices
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                    else if (displayIndex % 2 == 0) MaterialTheme.colorScheme.surface
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                                )
-                                .clickable { onToggleSelection(originalIndex) }
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // 选择框
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = { onToggleSelection(originalIndex) },
-                                modifier = Modifier.width(32.dp)
-                            )
-                            // 文件名
-                            Text(
-                                text = item.fileName,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(0.3f)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            // 本地路径（完整显示）
-                            Text(
-                                text = item.localPath.substringBeforeLast('/'),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(0.3f)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            // 远端路径（完整显示）
-                            Text(
-                                text = item.remotePath.substringBeforeLast('/'),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(0.3f)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            // 大小
-                            Column(
-                                horizontalAlignment = Alignment.End,
-                                modifier = Modifier.weight(0.1f)
-                            ) {
-                                Text(
-                                    text = formatFileSize(item.remoteSize),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                        // 分割线
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(0.5.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "同步预览",
+                            fontWeight = FontWeight.Bold
                         )
+                        Text(
+                            text = "已选 ${selectedIndices.size}/${items.size}  |  共需下载 ${formatFileSize(selectedTotalSize)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            )
+        },
+        bottomBar = {
+            // 底部操作栏
+            Surface(
+                tonalElevation = 3.dp,
+                shadowElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 全选按钮
+                    OutlinedButton(
+                        onClick = onSelectAll,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            if (selectedIndices.size == items.size && items.isNotEmpty()) "取消全选"
+                            else "全选"
+                        )
+                    }
+                    // 开始同步按钮
+                    Button(
+                        onClick = onConfirm,
+                        enabled = selectedIndices.isNotEmpty(),
+                        modifier = Modifier.weight(2f)
+                    ) {
+                        Text("开始同步 (${selectedIndices.size}个)")
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = selectedIndices.isNotEmpty()
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            // 搜索框
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("搜索文件名...") },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "清除")
+                        }
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp)
+            )
+
+            // 表头
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("开始同步 (${selectedIndices.size}个)")
+                Box(modifier = Modifier.width(40.dp))
+                Text(
+                    text = "文件名",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(0.25f)
+                )
+                Text(
+                    text = "本地路径",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(0.3f)
+                )
+                Text(
+                    text = "远端路径",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(0.35f)
+                )
+                Text(
+                    text = "大小",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(0.1f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+
+            // 文件列表
+            LazyColumn(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                itemsIndexed(filteredItems) { displayIndex, item ->
+                    val originalIndex = if (searchQuery.isEmpty()) displayIndex
+                    else items.indexOf(item)
+                    val isSelected = originalIndex in selectedIndices
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                else if (displayIndex % 2 == 0) MaterialTheme.colorScheme.surface
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+                            )
+                            .clickable { onToggleSelection(originalIndex) }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 选择框
+                        Checkbox(
+                            checked = isSelected,
+                            onCheckedChange = { onToggleSelection(originalIndex) },
+                            modifier = Modifier.width(40.dp)
+                        )
+                        // 文件名
+                        Text(
+                            text = item.fileName,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.25f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // 本地路径（完整显示）
+                        Text(
+                            text = item.localPath.substringBeforeLast('/'),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.3f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // 远端路径（完整显示）
+                        Text(
+                            text = item.remotePath.substringBeforeLast('/'),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.35f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // 大小
+                        Text(
+                            text = formatFileSize(item.remoteSize),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            modifier = Modifier.weight(0.1f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End
+                        )
+                    }
+                    // 分割线
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(0.5.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    )
+                }
             }
         }
-    )
+    }
 }
 
 /**
