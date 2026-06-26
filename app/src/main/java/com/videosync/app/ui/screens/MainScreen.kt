@@ -997,9 +997,11 @@ private fun NasConfigForm(
                         imageVector = Icons.Default.Folder,
                         contentDescription = "浏览目录",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+                    )
+                }
+            }
         }
-    )
+    }
 }
 
 /**
@@ -1009,7 +1011,7 @@ private fun NasConfigForm(
 @Composable
 private fun SyncPreviewDialog(
     items: List<SyncPreviewItem>,
-    selectedIndices: Set<Int>,
+    selectedIndices: List<Int>,
     onToggleSelection: (Int) -> Unit,
     onSelectAll: () -> Unit,
     onConfirm: () -> Unit,
