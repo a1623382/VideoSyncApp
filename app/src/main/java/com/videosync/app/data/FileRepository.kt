@@ -182,22 +182,28 @@ class FileRepository(private val context: Context) {
 
     /**
      * 检查远端是否有匹配的高画质文件
-     * 在远端目录中查找与本地视频同名的文件（不同扩展名）
+     * 优先匹配目录结构相似的文件，避免错误匹配
+     * @param localPath 本地视频完整路径
      * @param localName 本地视频基础名（不含扩展名）
      * @param localExtension 本地视频扩展名
      * @param remoteFiles 远端文件列表
      * @return 匹配的远端文件信息，null 表示无匹配
      */
     fun findMatchingRemoteFile(
+        localPath: String,
         localName: String,
         localExtension: String,
         remoteFiles: List<RemoteFileInfo>
     ): RemoteFileInfo? {
-        return remoteFiles.find { remote ->
+        // 获取本地文件的上一级目录名
+        val localParentDir = localPath.substringBeforeLast('/').substringAfterLast('/')
+
+        // 找到所有同名且格式匹配的远端文件
+        val candidates = remoteFiles.filter { remote ->
             val remoteBaseName = remote.name.substringBeforeLast('.')
             val remoteExtension = remote.name.substringAfterLast('.').lowercase()
 
-            // 匹配条件：
+            // 基本匹配条件：
             // 1. 基础文件名完全相同
             // 2. 远端扩展名是高画质格式
             // 3. 远端扩展名与本地不同（避免重复下载同格式文件）
@@ -205,6 +211,79 @@ class FileRepository(private val context: Context) {
                     remoteExtension in HQ_EXTENSIONS &&
                     remoteExtension != localExtension.lowercase()
         }
+
+        if (candidates.isEmpty()) return null
+
+        // 计算每个候选文件的目录相似性得分
+        val scoredCandidates = candidates.map { remote ->
+            val remoteParentDir = remote.path.substringBeforeLast('/').substringAfterLast('/')
+            val similarity = calculateDirectorySimilarity(localParentDir, remoteParentDir)
+            Pair(remote, similarity)
+        }
+
+        // 按相似性得分降序排序
+        val sorted = scoredCandidates.sortedByDescending { it.second }
+
+        // 如果最高相似性得分太低（目录差异大），且有多个候选，返回null避免错误匹配
+        // 但如果只有一个候选，即使目录不同也返回（因为没有更好的选择）
+        if (sorted.size > 1 && sorted[0].second < 0.3f) {
+            Logger.w("FileRepository", "目录差异过大，跳过匹配: 本地=$localParentDir, 远端=${sorted[0].first.path.substringBeforeLast('/').substringAfterLast('/')}")
+            return null
+        }
+
+        val bestMatch = sorted[0].first
+        Logger.d("FileRepository", "最佳匹配: ${bestMatch.name} (相似度: ${sorted[0].second})")
+        return bestMatch
+    }
+
+    /**
+     * 计算两个目录名的相似性
+     * 使用编辑距离和公共子串计算相似度
+     * @return 0.0 到 1.0 之间的相似度得分
+     */
+    private fun calculateDirectorySimilarity(dir1: String, dir2: String): Float {
+        if (dir1.isEmpty() || dir2.isEmpty()) return 0.5f
+        if (dir1.equals(dir2, ignoreCase = true)) return 1.0f
+
+        // 检查是否包含相同的关键词
+        val keywords1 = dir1.split(Regex("[\\s\\-_\\[\\]()（）]+")).filter { it.isNotEmpty() }
+        val keywords2 = dir2.split(Regex("[\\s\\-_\\[\\]()（）]+")).filter { it.isNotEmpty() }
+
+        val commonKeywords = keywords1.intersect(keywords2.toSet())
+        if (commonKeywords.isNotEmpty()) {
+            return 0.7f + (commonKeywords.size.toFloat() / maxOf(keywords1.size, keywords2.size) * 0.3f)
+        }
+
+        // 计算编辑距离相似度
+        val maxLen = maxOf(dir1.length, dir2.length)
+        if (maxLen == 0) return 1.0f
+
+        val editDistance = levenshteinDistance(dir1.lowercase(), dir2.lowercase())
+        return 1.0f - (editDistance.toFloat() / maxLen)
+    }
+
+    /**
+     * 计算两个字符串的编辑距离
+     */
+    private fun levenshteinDistance(s1: String, s2: String): Int {
+        val m = s1.length
+        val n = s2.length
+        val dp = Array(m + 1) { IntArray(n + 1) }
+
+        for (i in 0..m) dp[i][0] = i
+        for (j in 0..n) dp[0][j] = j
+
+        for (i in 1..m) {
+            for (j in 1..n) {
+                dp[i][j] = if (s1[i - 1] == s2[j - 1]) {
+                    dp[i - 1][j - 1]
+                } else {
+                    minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1
+                }
+            }
+        }
+
+        return dp[m][n]
     }
 
     /**

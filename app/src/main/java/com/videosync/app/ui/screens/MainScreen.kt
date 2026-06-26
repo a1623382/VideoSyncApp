@@ -504,6 +504,7 @@ fun MainScreen() {
                                 val previewItems = mutableListOf<SyncPreviewItem>()
                                 for (local in localVideos) {
                                     val match = fileRepository.findMatchingRemoteFile(
+                                        localPath = local.path,
                                         localName = local.name,
                                         localExtension = local.extension,
                                         remoteFiles = remoteFiles
@@ -2055,6 +2056,7 @@ private suspend fun startSync(
         // 查找匹配项并构建任务列表
         val matchQueue = localVideos.mapNotNull { local ->
             val match = fileRepository.findMatchingRemoteFile(
+                localPath = local.path,
                 localName = local.name,
                 localExtension = local.extension,
                 remoteFiles = remoteFiles
