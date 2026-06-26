@@ -1685,12 +1685,41 @@ private fun SyncPreviewScreen(
     onBack: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showPathDialog by remember { mutableStateOf(false) }
+    var pathDialogTitle by remember { mutableStateOf("") }
+    var pathDialogContent by remember { mutableStateOf("") }
 
     // 计算统计信息
     val selectedTotalSize = items.filterIndexed { index, _ -> index in selectedIndices }
         .sumOf { it.remoteSize }
     val filteredItems = if (searchQuery.isEmpty()) items
     else items.filter { it.fileName.contains(searchQuery, ignoreCase = true) }
+
+    // 路径详情弹窗
+    if (showPathDialog) {
+        AlertDialog(
+            onDismissRequest = { showPathDialog = false },
+            title = {
+                Text(
+                    text = pathDialogTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = pathDialogContent,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showPathDialog = false }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -1854,24 +1883,42 @@ private fun SyncPreviewScreen(
                             modifier = Modifier.weight(0.25f)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        // 本地路径（完整显示）
+                        // 本地路径（点击查看完整路径）
                         Text(
                             text = item.localPath.substringBeforeLast('/'),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(0.3f)
+                            modifier = Modifier
+                                .weight(0.3f)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    pathDialogTitle = "本地路径"
+                                    pathDialogContent = item.localPath
+                                    showPathDialog = true
+                                }
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                .padding(4.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        // 远端路径（完整显示）
+                        // 远端路径（点击查看完整路径）
                         Text(
                             text = item.remotePath.substringBeforeLast('/'),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(0.35f)
+                            modifier = Modifier
+                                .weight(0.35f)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    pathDialogTitle = "远端路径"
+                                    pathDialogContent = item.remotePath
+                                    showPathDialog = true
+                                }
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f))
+                                .padding(4.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         // 大小
