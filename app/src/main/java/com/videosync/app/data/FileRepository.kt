@@ -197,11 +197,10 @@ class FileRepository(private val context: Context) {
     /**
      * 检查远端是否有匹配的高画质文件
      * 优先匹配目录结构相似的文件，避免错误匹配
-     * 只有高质量编码(H.264/H.265等)的视频才匹配 MKV 文件
+     * 所有视频都尝试匹配 NAS 上的同名 MKV（NAS 会将各种编码转码为 HEVC MKV）
      * @param localPath 本地视频完整路径
      * @param localName 本地视频基础名（不含扩展名）
      * @param localExtension 本地视频扩展名
-     * @param isHighQualityCodec 本地视频是否为高质量编码
      * @param remoteFiles 远端文件列表
      * @return 匹配的远端文件信息，null 表示无匹配
      */
@@ -209,26 +208,20 @@ class FileRepository(private val context: Context) {
         localPath: String,
         localName: String,
         localExtension: String,
-        isHighQualityCodec: Boolean,
         remoteFiles: List<RemoteFileInfo>
     ): RemoteFileInfo? {
-        // 如果视频不是高质量编码（如 MPEG-4, 3GP 等），则不会有对应的 MKV 高画质版本
-        if (!isHighQualityCodec) {
-            Logger.d("FileRepository", "非高质量编码，跳过匹配: $localName ($localExtension)")
-            return null
-        }
-
         // 获取本地文件的上一级目录名
         val localParentDir = localPath.substringBeforeLast('/').substringAfterLast('/')
 
         // 找到所有同名且格式匹配的远端文件
+        // NAS 会将所有视频转码为 MKV，所以任何编码的视频都应该尝试匹配
         val candidates = remoteFiles.filter { remote ->
             val remoteBaseName = remote.name.substringBeforeLast('.')
             val remoteExtension = remote.name.substringAfterLast('.').lowercase()
 
             // 基本匹配条件：
             // 1. 基础文件名完全相同
-            // 2. 远端扩展名是高画质格式
+            // 2. 远端扩展名是高画质格式（MKV）
             // 3. 远端扩展名与本地不同（避免重复下载同格式文件）
             remoteBaseName == localName &&
                     remoteExtension in HQ_EXTENSIONS &&
