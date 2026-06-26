@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -57,6 +59,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -64,6 +67,8 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -159,6 +164,11 @@ fun MainScreen() {
     var password by remember { mutableStateOf("") }
     var remotePath by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+
+    // 远端目录浏览器状态
+    var showDirBrowser by remember { mutableStateOf(false) }
+    var remoteDirectories by remember { mutableStateListOf<String>() }
+    var isLoadingDirectories by remember { mutableStateOf(false) }
 
     // 连接与同步状态
     var isConnected by remember { mutableStateOf(false) }
@@ -409,7 +419,39 @@ fun MainScreen() {
                     passwordVisible = passwordVisible,
                     onPasswordVisibilityToggle = { passwordVisible = !passwordVisible },
                     remotePath = remotePath,
-                    onRemotePathChange = { remotePath = it }
+                    onRemotePathChange = { remotePath = it },
+                    onBrowseRemotePath = {
+                        // 打开目录浏览器
+                        scope.launch {
+                            if (nasHost.isEmpty() || shareName.isEmpty() || username.isEmpty()) {
+                                snackbarHostState.showSnackbar("请先填写服务器地址、共享文件夹和用户名")
+                                return@launch
+                            }
+                            isLoadingDirectories = true
+                            try {
+                                val connected = smbManager.connect(
+                                    host = nasHost,
+                                    port = nasPort.toIntOrNull() ?: 445,
+                                    username = username,
+                                    password = password,
+                                    shareName = shareName
+                                )
+                                if (connected) {
+                                    val dirs = smbManager.listDirectories(remotePath.ifEmpty { "/" })
+                                    remoteDirectories.clear()
+                                    remoteDirectories.addAll(dirs)
+                                    showDirBrowser = true
+                                    smbManager.disconnect()
+                                } else {
+                                    snackbarHostState.showSnackbar("连接失败，请检查配置")
+                                }
+                            } catch (e: Exception) {
+                                snackbarHostState.showSnackbar("获取目录失败：${e.message}")
+                            } finally {
+                                isLoadingDirectories = false
+                            }
+                        }
+                    }
                 )
             }
 
@@ -460,6 +502,69 @@ fun MainScreen() {
                 Spacer(modifier = Modifier.height(80.dp))
             }
         }
+    }
+
+    // 远端目录浏览器对话框
+    if (showDirBrowser) {
+        RemoteDirBrowserDialog(
+            currentPath = remotePath.ifEmpty { "/" },
+            directories = remoteDirectories,
+            isLoading = isLoadingDirectories,
+            onSelect = { selectedPath ->
+                remotePath = selectedPath
+                showDirBrowser = false
+            },
+            onRefresh = {
+                scope.launch {
+                    isLoadingDirectories = true
+                    try {
+                        val connected = smbManager.connect(
+                            host = nasHost,
+                            port = nasPort.toIntOrNull() ?: 445,
+                            username = username,
+                            password = password,
+                            shareName = shareName
+                        )
+                        if (connected) {
+                            val dirs = smbManager.listDirectories(selectedPath)
+                            remoteDirectories.clear()
+                            remoteDirectories.addAll(dirs)
+                            smbManager.disconnect()
+                        }
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("刷新失败：${e.message}")
+                    } finally {
+                        isLoadingDirectories = false
+                    }
+                }
+            },
+            onNavigateUp = { parentPath ->
+                scope.launch {
+                    isLoadingDirectories = true
+                    try {
+                        val connected = smbManager.connect(
+                            host = nasHost,
+                            port = nasPort.toIntOrNull() ?: 445,
+                            username = username,
+                            password = password,
+                            shareName = shareName
+                        )
+                        if (connected) {
+                            val dirs = smbManager.listDirectories(parentPath)
+                            remoteDirectories.clear()
+                            remoteDirectories.addAll(dirs)
+                            remotePath = parentPath
+                            smbManager.disconnect()
+                        }
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("导航失败：${e.message}")
+                    } finally {
+                        isLoadingDirectories = false
+                    }
+                }
+            },
+            onDismiss = { showDirBrowser = false }
+        )
     }
 }
 
@@ -538,7 +643,8 @@ private fun NasConfigForm(
     passwordVisible: Boolean,
     onPasswordVisibilityToggle: () -> Unit,
     remotePath: String,
-    onRemotePathChange: (String) -> Unit
+    onRemotePathChange: (String) -> Unit,
+    onBrowseRemotePath: () -> Unit = {}
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth()
@@ -637,18 +743,38 @@ private fun NasConfigForm(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // 远端子目录路径输入框
-            OutlinedTextField(
-                value = remotePath,
-                onValueChange = onRemotePathChange,
-                label = { Text("远端子目录路径") },
-                placeholder = { Text("共享文件夹下的相对路径，如 /movies") },
-                leadingIcon = {
-                    Icon(Icons.Default.Folder, contentDescription = null)
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // 远端子目录路径输入框（带浏览按钮）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = remotePath,
+                    onValueChange = onRemotePathChange,
+                    label = { Text("远端子目录路径") },
+                    placeholder = { Text("共享文件夹下的相对路径，如 /movies") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Folder, contentDescription = null)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                // 浏览目录按钮
+                IconButton(
+                    onClick = onBrowseRemotePath,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "浏览目录",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
         }
     }
 }
@@ -1042,6 +1168,155 @@ private fun formatFileSize(bytes: Long): String {
 }
 
 /**
+ * 远端目录浏览器对话框
+ * 显示 NAS 上的目录结构，支持导航和选择
+ */
+@Composable
+private fun RemoteDirBrowserDialog(
+    currentPath: String,
+    directories: List<String>,
+    isLoading: Boolean,
+    onSelect: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onNavigateUp: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = "选择目录",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "当前路径：$currentPath",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            strokeCap = StrokeCap.Round
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("加载中...")
+                    }
+                }
+            } else if (directories.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "此目录下没有子目录",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    // 返回上一级按钮
+                    if (currentPath != "/") {
+                        item {
+                            val parentPath = currentPath.trimEnd('/').substringBeforeLast('/').ifEmpty { "/" }
+                            ListItem(
+                                headlineContent = { Text(".. 返回上级") },
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onNavigateUp(parentPath) }
+                            )
+                        }
+                    }
+
+                    // 目录列表
+                    items(directories) { dir ->
+                        val fullPath = if (currentPath.endsWith("/")) {
+                            "$currentPath$dir"
+                        } else {
+                            "$currentPath/$dir"
+                        }
+                        ListItem(
+                            headlineContent = { Text(dir) },
+                            leadingContent = {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            trailingContent = {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "选择",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onNavigateUp(fullPath) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSelect(currentPath) }
+            ) {
+                Text("选择当前目录")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onRefresh) {
+                    Text("刷新")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        }
+    )
+}
+
+/**
  * 执行同步流程的核心函数
  */
 private suspend fun startSync(
@@ -1143,9 +1418,9 @@ private suspend fun startSync(
             return
         }
 
-        // 获取远端文件列表
-        snackbarHostState.showSnackbar("正在获取远端文件列表...")
-        val remoteFiles = smbManager.listFiles(remotePath)
+        // 获取远端文件列表（递归包含子目录）
+        snackbarHostState.showSnackbar("正在获取远端文件列表（包含子目录）...")
+        val remoteFiles = smbManager.listFilesRecursively(remotePath.ifEmpty { "/" })
         Logger.i("Sync", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
 
         // 查找匹配项并构建任务列表

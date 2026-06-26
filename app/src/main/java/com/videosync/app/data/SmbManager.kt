@@ -161,6 +161,81 @@ class SmbManager {
         }
 
     /**
+     * 递归列举远端目录下所有文件（包括子目录）
+     * @param directoryPath 目录路径
+     * @param maxDepth 最大递归深度（防止无限递归）
+     * @return 所有文件信息列表
+     */
+    suspend fun listFilesRecursively(
+        directoryPath: String,
+        maxDepth: Int = 10
+    ): List<RemoteFileInfo> = withContext(Dispatchers.IO) {
+        val result = mutableListOf<RemoteFileInfo>()
+        try {
+            val currentShare = share ?: return@withContext result
+            val entries = currentShare.list(directoryPath)
+
+            for (entry in entries) {
+                coroutineContext.ensureActive()
+                val fileName = entry.fileName
+                if (fileName == "." || fileName == "..") continue
+
+                val isDirectory = entry.fileAttributes and FileAttributes.FILE_ATTRIBUTE_DIRECTORY.value != 0L
+                val fullPath = if (directoryPath.endsWith("/")) {
+                    "$directoryPath$fileName"
+                } else {
+                    "$directoryPath/$fileName"
+                }
+
+                if (isDirectory) {
+                    // 递归列举子目录
+                    if (maxDepth > 0) {
+                        val subFiles = listFilesRecursively(fullPath, maxDepth - 1)
+                        result.addAll(subFiles)
+                    }
+                } else {
+                    result.add(
+                        RemoteFileInfo(
+                            name = fileName,
+                            size = entry.endOfFile,
+                            path = fullPath
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        result
+    }
+
+    /**
+     * 列举远端目录下的子目录（用于目录浏览器）
+     * @param directoryPath 目录路径
+     * @return 子目录名称列表
+     */
+    suspend fun listDirectories(directoryPath: String): List<String> =
+        withContext(Dispatchers.IO) {
+            val result = mutableListOf<String>()
+            try {
+                val currentShare = share ?: return@withContext result
+                val entries = currentShare.list(directoryPath)
+
+                for (entry in entries) {
+                    coroutineContext.ensureActive()
+                    val fileName = entry.fileName
+                    if (fileName == "." || fileName == "..") continue
+                    if (entry.fileAttributes and FileAttributes.FILE_ATTRIBUTE_DIRECTORY.value != 0L) {
+                        result.add(fileName)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            result.sorted()
+        }
+
+    /**
      * 从远端下载文件
      * @param remotePath 远端文件路径
      * @param outputStream 输出流（写入本地文件）
