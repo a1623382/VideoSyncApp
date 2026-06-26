@@ -42,7 +42,9 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
@@ -1530,6 +1533,7 @@ private fun NasConfigForm(
 /**
  * 同步预览对话框
  * 显示匹配的视频列表，支持选择性处理
+ * 包含搜索过滤、总大小统计和清晰的路径对比显示
  */
 @Composable
 private fun SyncPreviewDialog(
@@ -1540,6 +1544,14 @@ private fun SyncPreviewDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+
+    // 计算统计信息
+    val selectedTotalSize = items.filterIndexed { index, _ -> index in selectedIndices }
+        .sumOf { it.remoteSize }
+    val filteredItems = if (searchQuery.isEmpty()) items
+    else items.filter { it.fileName.contains(searchQuery, ignoreCase = true) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1562,7 +1574,7 @@ private fun SyncPreviewDialog(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "请选择要同步的视频文件",
+                    text = "共需下载 ${formatFileSize(selectedTotalSize)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1570,7 +1582,29 @@ private fun SyncPreviewDialog(
         },
         text = {
             Column {
-                // 全选/取消全选按钮
+                // 搜索框
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("搜索文件名...") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "清除")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 全选/取消全选按钮和统计
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1579,14 +1613,20 @@ private fun SyncPreviewDialog(
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    androidx.compose.material3.Checkbox(
-                        checked = selectedIndices.size == items.size,
+                    Checkbox(
+                        checked = selectedIndices.size == items.size && items.isNotEmpty(),
                         onCheckedChange = { onSelectAll() }
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (selectedIndices.size == items.size) "取消全选" else "全选",
+                        text = if (selectedIndices.size == items.size && items.isNotEmpty()) "取消全选" else "全选",
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "${filteredItems.size} 个文件",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -1602,68 +1642,98 @@ private fun SyncPreviewDialog(
                 // 文件列表
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    itemsIndexed(items) { index, item ->
-                        val isSelected = index in selectedIndices
-                        Row(
+                    itemsIndexed(filteredItems) { displayIndex, item ->
+                        val originalIndex = if (searchQuery.isEmpty()) displayIndex
+                        else items.indexOf(item)
+                        val isSelected = originalIndex in selectedIndices
+
+                        ElevatedCard(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                    else Color.Transparent
-                                )
-                                .clickable { onToggleSelection(index) }
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = { onToggleSelection(index) }
+                                .clickable { onToggleSelection(originalIndex) },
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = if (isSelected) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                }
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                // 文件名
-                                Text(
-                                    text = item.fileName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                // 本地路径
-                                Text(
-                                    text = "本地：${item.localPath.substringAfterLast('/')}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                // 远端路径
-                                Text(
-                                    text = "远端：${item.remotePath}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            // 文件大小对比
-                            Column(
-                                horizontalAlignment = Alignment.End
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = formatFileSize(item.remoteSize),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { onToggleSelection(originalIndex) }
                                 )
-                                Text(
-                                    text = "替换 ${formatFileSize(item.localSize)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    // 文件名
+                                    Text(
+                                        text = item.fileName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // 本地路径（带图标）
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Phone,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = item.localPath.substringBeforeLast('/').substringAfterLast('/'),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    // 远端路径（带图标）
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Cloud,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = item.remotePath.substringBeforeLast('/'),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                // 文件大小对比
+                                Column(
+                                    horizontalAlignment = Alignment.End
+                                ) {
+                                    Text(
+                                        text = formatFileSize(item.remoteSize),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "替换 ${formatFileSize(item.localSize)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
