@@ -321,9 +321,10 @@ fun MainScreen() {
         floatingActionButton = {
             // 同步控制按钮组
             if (isSyncing) {
-                // 同步中：显示暂停/继续和停止按钮
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // 同步中：显示暂停和停止按钮（垂直排列）
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.End
                 ) {
                     // 暂停/继续按钮
                     ExtendedFloatingActionButton(
@@ -346,7 +347,7 @@ fun MainScreen() {
                             contentDescription = if (isPaused) "继续" else "暂停"
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (isPaused) "继续" else "暂停")
+                        Text(if (isPaused) "继续同步" else "暂停")
                     }
                     // 停止按钮
                     ExtendedFloatingActionButton(
@@ -366,7 +367,7 @@ fun MainScreen() {
                             contentDescription = "停止"
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("停止")
+                        Text("停止同步")
                     }
                 }
             } else if (pendingSyncItems.isNotEmpty()) {
