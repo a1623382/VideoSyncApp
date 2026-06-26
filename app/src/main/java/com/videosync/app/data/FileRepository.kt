@@ -40,13 +40,17 @@ class FileRepository(private val context: Context) {
      * @param path 文件完整绝对路径
      * @param size 文件大小（字节）
      * @param uri 文件的 MediaStore URI
+     * @param codec 视频编码格式（如 H.264, H.265）
+     * @param isHighQualityCodec 是否为高质量编码（有对应 MKV 的前提）
      */
     data class LocalVideoInfo(
         val name: String,
         val extension: String,
         val path: String,
         val size: Long,
-        val uri: Uri?
+        val uri: Uri?,
+        val codec: String = "",
+        val isHighQualityCodec: Boolean = true
     )
 
     /**
@@ -161,13 +165,22 @@ class FileRepository(private val context: Context) {
                     id
                 )
 
+                // 检测视频编码
+                val codecInfo = try {
+                    VideoCodecHelper.detectCodec(context, path)
+                } catch (e: Exception) {
+                    VideoCodecHelper.VideoCodecInfo()
+                }
+
                 videos.add(
                     LocalVideoInfo(
                         name = baseName,
                         extension = extension,
                         path = path,
                         size = size,
-                        uri = contentUri
+                        uri = contentUri,
+                        codec = codecInfo.codec,
+                        isHighQualityCodec = codecInfo.isHighQuality
                     )
                 )
                 scannedCount++
@@ -183,9 +196,11 @@ class FileRepository(private val context: Context) {
     /**
      * 检查远端是否有匹配的高画质文件
      * 优先匹配目录结构相似的文件，避免错误匹配
+     * 只有高质量编码(H.264/H.265等)的视频才匹配 MKV 文件
      * @param localPath 本地视频完整路径
      * @param localName 本地视频基础名（不含扩展名）
      * @param localExtension 本地视频扩展名
+     * @param isHighQualityCodec 本地视频是否为高质量编码
      * @param remoteFiles 远端文件列表
      * @return 匹配的远端文件信息，null 表示无匹配
      */
@@ -193,8 +208,15 @@ class FileRepository(private val context: Context) {
         localPath: String,
         localName: String,
         localExtension: String,
+        isHighQualityCodec: Boolean,
         remoteFiles: List<RemoteFileInfo>
     ): RemoteFileInfo? {
+        // 如果视频不是高质量编码（如 MPEG-4, 3GP 等），则不会有对应的 MKV 高画质版本
+        if (!isHighQualityCodec) {
+            Logger.d("FileRepository", "非高质量编码，跳过匹配: $localName ($localExtension)")
+            return null
+        }
+
         // 获取本地文件的上一级目录名
         val localParentDir = localPath.substringBeforeLast('/').substringAfterLast('/')
 

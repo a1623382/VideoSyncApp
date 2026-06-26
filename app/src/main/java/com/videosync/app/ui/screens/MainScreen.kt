@@ -507,6 +507,7 @@ fun MainScreen() {
                                         localPath = local.path,
                                         localName = local.name,
                                         localExtension = local.extension,
+                                        isHighQualityCodec = local.isHighQualityCodec,
                                         remoteFiles = remoteFiles
                                     )
                                     if (match != null) {
@@ -1839,10 +1840,10 @@ private fun SyncPreviewScreen(
                     modifier = Modifier.weight(0.35f)
                 )
                 Text(
-                    text = "大小",
+                    text = "本地→远端",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(0.1f),
+                    modifier = Modifier.weight(0.12f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.End
                 )
             }
@@ -1922,16 +1923,31 @@ private fun SyncPreviewScreen(
                                 .padding(4.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        // 大小
-                        Text(
-                            text = formatFileSize(item.remoteSize),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            modifier = Modifier.weight(0.1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End
-                        )
+                        // 大小对比（本地 → 远端）
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            modifier = Modifier.weight(0.12f)
+                        ) {
+                            Text(
+                                text = formatFileSize(item.localSize),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "→",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = formatFileSize(item.remoteSize),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1
+                            )
+                        }
                     }
                     // 分割线
                     Box(
@@ -2059,6 +2075,7 @@ private suspend fun startSync(
                 localPath = local.path,
                 localName = local.name,
                 localExtension = local.extension,
+                isHighQualityCodec = local.isHighQualityCodec,
                 remoteFiles = remoteFiles
             )
             if (match != null) {
