@@ -33,11 +33,23 @@ jobs:
     - name: 授予 Gradle 执行权限
       run: chmod +x gradlew
 
+    - name: 生成签名密钥
+      run: |
+        keytool -genkey -v -keystore app/release-keystore.jks \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -alias videosync \
+          -storepass videosync123 -keypass videosync123 \
+          -dname "CN=VideoSync, OU=Dev, O=VideoSync, L=Beijing, ST=Beijing, C=CN"
+
     - name: 构建 Debug APK
       run: ./gradlew assembleDebug
 
     - name: 构建 Release APK
       run: ./gradlew assembleRelease
+
+    - name: 重命名 Release APK
+      run: |
+        mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/VideoSync-v1.0.0-release.apk
 
     - name: 上传 Debug APK
       uses: actions/upload-artifact@v4

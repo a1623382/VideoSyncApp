@@ -22,17 +22,22 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("release-keystore.jks")
-            storePassword = "videosync123"
-            keyAlias = "videosync"
-            keyPassword = "videosync123"
+            val ksFile = file("release-keystore.jks")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = "videosync123"
+                keyAlias = "videosync"
+                keyPassword = "videosync123"
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
-            signingConfig = signingConfigs.getByName("release")
+            if (file("release-keystore.jks").exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
