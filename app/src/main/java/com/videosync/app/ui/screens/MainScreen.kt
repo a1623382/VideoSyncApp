@@ -1695,6 +1695,8 @@ private fun SyncPreviewScreen(
     // 计算统计信息
     val selectedTotalSize = items.filterIndexed { index, _ -> index in selectedIndices }
         .sumOf { it.remoteSize }
+    val selectedLocalTotalSize = items.filterIndexed { index, _ -> index in selectedIndices }
+        .sumOf { it.localSize }
     val filteredItems = if (searchQuery.isEmpty()) items
     else items.filter { it.fileName.contains(searchQuery, ignoreCase = true) }
 
@@ -1734,10 +1736,32 @@ private fun SyncPreviewScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "已选 ${selectedIndices.size}/${items.size}  |  共需下载 ${formatFileSize(selectedTotalSize)}",
+                            text = "已选 ${selectedIndices.size}/${items.size}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        // 本地→远端总大小对比
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "本地: ${formatFileSize(selectedLocalTotalSize)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "→",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
+                                text = "远端: ${formatFileSize(selectedTotalSize)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
