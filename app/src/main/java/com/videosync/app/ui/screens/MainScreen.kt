@@ -83,7 +83,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -104,6 +103,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.videosync.app.data.FileRepository
 import com.videosync.app.data.NasConfig
+import com.videosync.app.data.ProcessedFilesManager
 import com.videosync.app.data.SettingsDataStore
 import com.videosync.app.data.SmbManager
 import com.videosync.app.ui.theme.StatusConnected
@@ -111,9 +111,7 @@ import com.videosync.app.ui.theme.StatusDisconnected
 import com.videosync.app.ui.theme.StatusSyncing
 import com.videosync.app.util.BatteryOptimizationHelper
 import com.videosync.app.util.Logger
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * 传输任务状态枚举
@@ -177,6 +175,7 @@ fun MainScreen() {
     val settingsDataStore = remember { SettingsDataStore(context) }
     val fileRepository = remember { FileRepository(context) }
     val smbManager = remember { SmbManager() }
+    val processedFilesManager = remember { ProcessedFilesManager(context) }
 
     // 从 DataStore 读取历史配置
     val savedConfig by settingsDataStore.nasConfigFlow.collectAsState(initial = NasConfig())
@@ -502,8 +501,20 @@ fun MainScreen() {
                                 val remoteFiles = smbManager.listFilesRecursively(scanPath)
                                 Logger.i("Preview", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
 
+                                // 查找匹配项（过滤已处理的文件）
                                 val previewItems = mutableListOf<SyncPreviewItem>()
+                                var skippedCount = 0
                                 for (local in localVideos) {
+                                    // 检查是否已处理过
+                                    val isProcessed = processedFilesManager.isProcessed(
+                                        fileName = local.name,
+                                        filePath = local.path
+                                    )
+                                    if (isProcessed) {
+                                        skippedCount++
+                                        continue
+                                    }
+
                                     val match = fileRepository.findMatchingRemoteFile(
                                         localPath = local.path,
                                         localName = local.name,
@@ -522,6 +533,10 @@ fun MainScreen() {
                                             )
                                         )
                                     }
+                                }
+
+                                if (skippedCount > 0) {
+                                    Logger.i("Preview", "跳过 $skippedCount 个已处理文件")
                                 }
 
                                 smbManager.disconnect()
@@ -851,6 +866,18 @@ fun MainScreen() {
                                     downloadedSize = transferTasks[index].remoteSize,
                                     status = TaskStatus.COMPLETED
                                 )
+                                // 记录已处理文件
+                                val previewItem = selectedPreviewItems.getOrNull(index)
+                                if (previewItem != null) {
+                                    scope.launch {
+                                        processedFilesManager.markAsProcessed(
+                                            originalName = previewItem.fileName,
+                                            originalExtension = previewItem.localPath.substringAfterLast('.'),
+                                            originalPath = previewItem.localPath,
+                                            newFileName = previewItem.remotePath.substringAfterLast('/')
+                                        )
+                                    }
+                                }
                             }
                         },
                         onTaskFailed = { index, error ->
