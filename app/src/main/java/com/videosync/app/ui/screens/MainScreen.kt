@@ -68,6 +68,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -79,6 +81,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -101,6 +104,7 @@ import com.videosync.app.data.SmbManager
 import com.videosync.app.ui.theme.StatusConnected
 import com.videosync.app.ui.theme.StatusDisconnected
 import com.videosync.app.ui.theme.StatusSyncing
+import com.videosync.app.util.BatteryOptimizationHelper
 import com.videosync.app.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -116,6 +120,22 @@ enum class TaskStatus {
     COMPLETED,  // 已完成
     FAILED      // 失败
 }
+
+/**
+ * 同步预览项数据类
+ * @param fileName 文件名
+ * @param localPath 本地文件路径
+ * @param remotePath 远端文件路径
+ * @param localSize 本地文件大小
+ * @param remoteSize 远端文件大小
+ */
+data class SyncPreviewItem(
+    val fileName: String,
+    val localPath: String,
+    val remotePath: String,
+    val localSize: Long,
+    val remoteSize: Long
+)
 
 /**
  * 传输任务数据类
@@ -170,10 +190,29 @@ fun MainScreen() {
     val remoteDirectories = remember { mutableStateListOf<String>() }
     var isLoadingDirectories by remember { mutableStateOf(false) }
 
+    // 同步预览对话框状态
+    var showSyncPreview by remember { mutableStateOf(false) }
+    val syncPreviewItems = remember { mutableStateListOf<SyncPreviewItem>() }
+    val selectedItems = remember { mutableStateSetOf<Int>() }
+
     // 连接与同步状态
     var isConnected by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
     var hasStoragePermission by remember { mutableStateOf(false) }
+    var isIgnoringBatteryOptimization by remember { mutableStateOf(false) }
+
+    // 电池优化请求启动器
+    val batteryOptimizationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 重新检查电池优化状态
+        isIgnoringBatteryOptimization = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
+        if (isIgnoringBatteryOptimization) {
+            scope.launch {
+                snackbarHostState.showSnackbar("电池优化已关闭，可以后台运行")
+            }
+        }
+    }
 
     // 传输任务列表
     val transferTasks = remember { mutableStateListOf<TransferTask>() }
@@ -220,6 +259,7 @@ fun MainScreen() {
     // 启动时检查权限状态
     LaunchedEffect(Unit) {
         hasStoragePermission = fileRepository.hasStoragePermission()
+        isIgnoringBatteryOptimization = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
     }
 
     Scaffold(
@@ -280,76 +320,89 @@ fun MainScreen() {
                             snackbarHostState.showSnackbar("同步已停止")
                         }
                     } else {
-                        // 开始同步
-                        transferTasks.clear()
-                        currentTaskIndex = -1
+                        // 扫描并显示预览对话框
                         scope.launch {
-                            startSync(
-                                nasHost = nasHost,
-                                nasPort = nasPort,
-                                shareName = shareName,
-                                username = username,
-                                password = password,
-                                remotePath = remotePath,
-                                smbManager = smbManager,
-                                fileRepository = fileRepository,
-                                settingsDataStore = settingsDataStore,
-                                snackbarHostState = snackbarHostState,
-                                onConnecting = { /* 连接中 */ },
-                                onConnected = { isConnected = true },
-                                onDisconnected = { isConnected = false },
-                                onTaskListReady = { tasks ->
-                                    transferTasks.clear()
-                                    transferTasks.addAll(tasks)
-                                },
-                                onTaskStart = { index ->
-                                    currentTaskIndex = index
-                                },
-                                onTaskProgress = { index, progress, downloadedSize ->
-                                    if (index in transferTasks.indices) {
-                                        transferTasks[index] = transferTasks[index].copy(
-                                            progress = progress,
-                                            downloadedSize = downloadedSize,
-                                            status = TaskStatus.DOWNLOADING
+                            if (nasHost.isEmpty() || shareName.isEmpty() || username.isEmpty()) {
+                                snackbarHostState.showSnackbar("请先填写服务器地址、共享文件夹和用户名")
+                                return@launch
+                            }
+                            if (!fileRepository.hasStoragePermission()) {
+                                snackbarHostState.showSnackbar("请先授予存储权限")
+                                return@launch
+                            }
+
+                            snackbarHostState.showSnackbar("正在扫描匹配文件...")
+
+                            try {
+                                // 扫描本地视频
+                                val localVideos = fileRepository.scanAllVideos()
+                                Logger.i("Preview", "本地视频扫描完成，共 ${localVideos.size} 个文件")
+
+                                // 连接 SMB 获取远端文件
+                                val connected = smbManager.connect(
+                                    host = nasHost,
+                                    port = nasPort.toIntOrNull() ?: 445,
+                                    username = username,
+                                    password = password,
+                                    shareName = shareName
+                                )
+
+                                if (!connected) {
+                                    snackbarHostState.showSnackbar("连接 NAS 失败，请检查配置")
+                                    return@launch
+                                }
+
+                                isConnected = true
+
+                                // 获取远端文件列表（递归包含子目录）
+                                snackbarHostState.showSnackbar("正在获取远端文件列表...")
+                                val remoteFiles = smbManager.listFilesRecursively(remotePath.ifEmpty { "/" })
+                                Logger.i("Preview", "远端文件列表获取完成，共 ${remoteFiles.size} 个文件")
+
+                                // 查找匹配项
+                                val previewItems = mutableListOf<SyncPreviewItem>()
+                                for (local in localVideos) {
+                                    val match = fileRepository.findMatchingRemoteFile(
+                                        localName = local.name,
+                                        localExtension = local.extension,
+                                        remoteFiles = remoteFiles
+                                    )
+                                    if (match != null) {
+                                        previewItems.add(
+                                            SyncPreviewItem(
+                                                fileName = local.name,
+                                                localPath = local.path,
+                                                remotePath = match.path,
+                                                localSize = local.size,
+                                                remoteSize = match.size
+                                            )
                                         )
-                                    }
-                                },
-                                onTaskVerifying = { index ->
-                                    if (index in transferTasks.indices) {
-                                        transferTasks[index] = transferTasks[index].copy(
-                                            status = TaskStatus.VERIFYING
-                                        )
-                                    }
-                                },
-                                onTaskComplete = { index ->
-                                    if (index in transferTasks.indices) {
-                                        transferTasks[index] = transferTasks[index].copy(
-                                            progress = 100f,
-                                            downloadedSize = transferTasks[index].remoteSize,
-                                            status = TaskStatus.COMPLETED
-                                        )
-                                    }
-                                },
-                                onTaskFailed = { index, error ->
-                                    if (index in transferTasks.indices) {
-                                        transferTasks[index] = transferTasks[index].copy(
-                                            status = TaskStatus.FAILED,
-                                            errorMessage = error
-                                        )
-                                    }
-                                },
-                                onSyncComplete = {
-                                    isSyncing = false
-                                    currentTaskIndex = -1
-                                },
-                                onError = { error ->
-                                    isSyncing = false
-                                    isConnected = false
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar(error)
                                     }
                                 }
-                            )
+
+                                smbManager.disconnect()
+                                isConnected = false
+
+                                if (previewItems.isEmpty()) {
+                                    snackbarHostState.showSnackbar("未找到可匹配的高画质文件")
+                                    return@launch
+                                }
+
+                                // 显示预览对话框
+                                syncPreviewItems.clear()
+                                syncPreviewItems.addAll(previewItems)
+                                selectedItems.clear()
+                                selectedItems.addAll(previewItems.indices)
+                                showSyncPreview = true
+
+                                Logger.i("Preview", "找到 ${previewItems.size} 个匹配文件，等待用户确认")
+
+                            } catch (e: Exception) {
+                                Logger.e("Preview", "扫描匹配文件失败", e)
+                                snackbarHostState.showSnackbar("扫描失败：${e.message}")
+                                smbManager.disconnect()
+                                isConnected = false
+                            }
                         }
                     }
                 },
@@ -398,6 +451,25 @@ fun MainScreen() {
                                     Manifest.permission.WRITE_EXTERNAL_STORAGE
                                 )
                             )
+                        }
+                    }
+                )
+            }
+
+            // 电池优化状态卡片
+            item {
+                BatteryOptimizationCard(
+                    isIgnoring = isIgnoringBatteryOptimization,
+                    onRequestIgnore = {
+                        if (BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)) {
+                            isIgnoringBatteryOptimization = true
+                            scope.launch {
+                                snackbarHostState.showSnackbar("电池优化已关闭")
+                            }
+                        } else {
+                            // 先尝试直接请求
+                            val intent = BatteryOptimizationHelper.getRequestIgnoreBatteryOptimizationsIntent(context)
+                            batteryOptimizationLauncher.launch(intent)
                         }
                     }
                 )
@@ -566,6 +638,104 @@ fun MainScreen() {
             onDismiss = { showDirBrowser = false }
         )
     }
+
+    // 同步预览对话框
+    if (showSyncPreview) {
+        SyncPreviewDialog(
+            items = syncPreviewItems,
+            selectedIndices = selectedItems,
+            onToggleSelection = { index ->
+                if (index in selectedItems) {
+                    selectedItems.remove(index)
+                } else {
+                    selectedItems.add(index)
+                }
+            },
+            onSelectAll = {
+                if (selectedItems.size == syncPreviewItems.size) {
+                    selectedItems.clear()
+                } else {
+                    selectedItems.clear()
+                    selectedItems.addAll(syncPreviewItems.indices)
+                }
+            },
+            onConfirm = {
+                showSyncPreview = false
+                // 开始同步选中的任务
+                transferTasks.clear()
+                currentTaskIndex = -1
+                val selectedPreviewItems = syncPreviewItems.filterIndexed { index, _ -> index in selectedItems }
+                scope.launch {
+                    startSyncWithPreview(
+                        nasHost = nasHost,
+                        nasPort = nasPort,
+                        shareName = shareName,
+                        username = username,
+                        password = password,
+                        smbManager = smbManager,
+                        fileRepository = fileRepository,
+                        settingsDataStore = settingsDataStore,
+                        snackbarHostState = snackbarHostState,
+                        previewItems = selectedPreviewItems,
+                        onConnected = { isConnected = true },
+                        onDisconnected = { isConnected = false },
+                        onTaskListReady = { tasks ->
+                            transferTasks.clear()
+                            transferTasks.addAll(tasks)
+                        },
+                        onTaskStart = { index ->
+                            currentTaskIndex = index
+                        },
+                        onTaskProgress = { index, progress, downloadedSize ->
+                            if (index in transferTasks.indices) {
+                                transferTasks[index] = transferTasks[index].copy(
+                                    progress = progress,
+                                    downloadedSize = downloadedSize,
+                                    status = TaskStatus.DOWNLOADING
+                                )
+                            }
+                        },
+                        onTaskVerifying = { index ->
+                            if (index in transferTasks.indices) {
+                                transferTasks[index] = transferTasks[index].copy(
+                                    status = TaskStatus.VERIFYING
+                                )
+                            }
+                        },
+                        onTaskComplete = { index ->
+                            if (index in transferTasks.indices) {
+                                transferTasks[index] = transferTasks[index].copy(
+                                    progress = 100f,
+                                    downloadedSize = transferTasks[index].remoteSize,
+                                    status = TaskStatus.COMPLETED
+                                )
+                            }
+                        },
+                        onTaskFailed = { index, error ->
+                            if (index in transferTasks.indices) {
+                                transferTasks[index] = transferTasks[index].copy(
+                                    status = TaskStatus.FAILED,
+                                    errorMessage = error
+                                )
+                            }
+                        },
+                        onSyncComplete = {
+                            isSyncing = false
+                            currentTaskIndex = -1
+                        },
+                        onError = { error ->
+                            isSyncing = false
+                            isConnected = false
+                            scope.launch {
+                                snackbarHostState.showSnackbar(error)
+                            }
+                        }
+                    )
+                }
+            },
+            onDismiss = { showSyncPreview = false }
+        )
+    }
 }
 
 /**
@@ -618,6 +788,63 @@ private fun PermissionCard(
             if (!hasPermission) {
                 Button(onClick = onRequestPermission) {
                     Text("授予权限")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 电池优化状态卡片
+ * 引导用户关闭电池优化，确保后台同步不被系统杀死
+ */
+@Composable
+private fun BatteryOptimizationCard(
+    isIgnoring: Boolean,
+    onRequestIgnore: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (isIgnoring) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            } else {
+                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isIgnoring) Icons.Default.CheckCircle else Icons.Default.Pending,
+                contentDescription = null,
+                tint = if (isIgnoring) StatusConnected else MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isIgnoring) "电池优化已关闭" else "建议关闭电池优化",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (isIgnoring) {
+                        "应用可以在后台持续运行同步任务"
+                    } else {
+                        "关闭后可确保同步任务不被系统中断"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (!isIgnoring) {
+                Button(onClick = onRequestIgnore) {
+                    Text("关闭优化")
                 }
             }
         }
@@ -772,545 +999,158 @@ private fun NasConfigForm(
                         imageVector = Icons.Default.Folder,
                         contentDescription = "浏览目录",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 连接状态卡片
- */
-@Composable
-private fun ConnectionStatusCard(
-    isConnected: Boolean,
-    isSyncing: Boolean,
-    nasHost: String,
-    taskCount: Int,
-    completedCount: Int
-) {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = when {
-                isSyncing -> StatusSyncing.copy(alpha = 0.1f)
-                isConnected -> StatusConnected.copy(alpha = 0.1f)
-                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            }
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = if (isConnected) Icons.Default.Cloud else Icons.Default.CloudOff,
-                contentDescription = null,
-                tint = when {
-                    isSyncing -> StatusSyncing
-                    isConnected -> StatusConnected
-                    else -> StatusDisconnected
-                },
-                modifier = Modifier.size(40.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = when {
-                        isSyncing -> "同步中..."
-                        isConnected -> "已连接"
-                        else -> "未连接"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                if (nasHost.isNotEmpty()) {
-                    Text(
-                        text = "目标：$nasHost",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            // 任务统计
-            if (taskCount > 0) {
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "$completedCount/$taskCount",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "已完成",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 整体进度卡片
- * 显示总进度条和当前文件进度条的对比
- */
-@Composable
-private fun OverallProgressCard(
-    tasks: List<TransferTask>,
-    currentIndex: Int
-) {
-    val completedCount = tasks.count { it.status == TaskStatus.COMPLETED }
-    val totalCount = tasks.size
-    val overallProgress = if (totalCount > 0) {
-        completedCount.toFloat() / totalCount * 100
-    } else 0f
-
-    val currentTask = if (currentIndex in tasks.indices) tasks[currentIndex] else null
-
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = StatusSyncing.copy(alpha = 0.1f)
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = "同步进度",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            // 总进度条
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "总进度",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "${String.format("%.1f", overallProgress)}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = overallProgress / 100f,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = StatusSyncing,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                    strokeCap = StrokeCap.Round
-                )
-            }
-
-            // 当前文件进度条
-            if (currentTask != null && currentTask.status == TaskStatus.DOWNLOADING) {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "当前文件",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${String.format("%.1f", currentTask.progress)}%",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = currentTask.progress / 100f,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        strokeCap = StrokeCap.Round
-                    )
-                    // 文件大小对比
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "已下载: ${formatFileSize(currentTask.downloadedSize)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "总计: ${formatFileSize(currentTask.remoteSize)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // 统计信息
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                StatusChip(
-                    count = tasks.count { it.status == TaskStatus.PENDING },
-                    label = "等待中",
-                    color = MaterialTheme.colorScheme.outline
-                )
-                StatusChip(
-                    count = tasks.count { it.status in listOf(TaskStatus.DOWNLOADING, TaskStatus.VERIFYING) },
-                    label = "传输中",
-                    color = StatusSyncing
-                )
-                StatusChip(
-                    count = tasks.count { it.status == TaskStatus.COMPLETED },
-                    label = "已完成",
-                    color = StatusConnected
-                )
-                StatusChip(
-                    count = tasks.count { it.status == TaskStatus.FAILED },
-                    label = "失败",
-                    color = StatusDisconnected
-                )
-            }
-        }
-    }
-}
-
-/**
- * 状态统计小标签
- */
-@Composable
-private fun StatusChip(
-    count: Int,
-    label: String,
-    color: Color
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .background(
-                    color = color.copy(alpha = 0.1f),
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = color
             )
         }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
+    )
 }
 
 /**
- * 单个传输任务项
+ * 同步预览对话框
+ * 显示匹配的视频列表，支持选择性处理
  */
 @Composable
-private fun TransferTaskItem(
-    task: TransferTask,
-    index: Int,
-    isActive: Boolean
-) {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = if (isActive) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            } else {
-                MaterialTheme.colorScheme.surface
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp)
-        ) {
-            // 文件名和状态
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 状态图标
-                Icon(
-                    imageVector = when (task.status) {
-                        TaskStatus.PENDING -> Icons.Default.Pending
-                        TaskStatus.DOWNLOADING -> Icons.Default.Sync
-                        TaskStatus.VERIFYING -> Icons.Default.Sync
-                        TaskStatus.COMPLETED -> Icons.Default.CheckCircle
-                        TaskStatus.FAILED -> Icons.Default.Error
-                    },
-                    contentDescription = null,
-                    tint = when (task.status) {
-                        TaskStatus.PENDING -> MaterialTheme.colorScheme.outline
-                        TaskStatus.DOWNLOADING -> StatusSyncing
-                        TaskStatus.VERIFYING -> StatusSyncing
-                        TaskStatus.COMPLETED -> StatusConnected
-                        TaskStatus.FAILED -> StatusDisconnected
-                    },
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // 文件名
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = task.fileName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    // 状态文字
-                    Text(
-                        text = when (task.status) {
-                            TaskStatus.PENDING -> "等待传输"
-                            TaskStatus.DOWNLOADING -> "下载中"
-                            TaskStatus.VERIFYING -> "校验中"
-                            TaskStatus.COMPLETED -> "已完成"
-                            TaskStatus.FAILED -> "失败：${task.errorMessage}"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = when (task.status) {
-                            TaskStatus.FAILED -> StatusDisconnected
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            // 进度条（仅在下载中显示）
-            if (task.status == TaskStatus.DOWNLOADING) {
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = task.progress / 100f,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = StatusSyncing,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                    strokeCap = StrokeCap.Round
-                )
-            }
-
-            // 文件大小对比信息
-            if (task.status != TaskStatus.PENDING) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "本地: ${formatFileSize(task.localSize)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "远端: ${formatFileSize(task.remoteSize)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 格式化文件大小显示
- */
-private fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "${bytes}B"
-        bytes < 1024 * 1024 -> "${bytes / 1024}KB"
-        bytes < 1024 * 1024 * 1024 -> String.format("%.1fMB", bytes / (1024.0 * 1024.0))
-        else -> String.format("%.2fGB", bytes / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-/**
- * 远端目录浏览器对话框
- * 显示 NAS 上的目录结构，支持导航和选择
- */
-@Composable
-private fun RemoteDirBrowserDialog(
-    currentPath: String,
-    directories: List<String>,
-    isLoading: Boolean,
-    onSelect: (String) -> Unit,
-    onRefresh: () -> Unit,
-    onNavigateUp: (String) -> Unit,
+private fun SyncPreviewDialog(
+    items: List<SyncPreviewItem>,
+    selectedIndices: Set<Int>,
+    onToggleSelection: (Int) -> Unit,
+    onSelectAll: () -> Unit,
+    onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text(
-                    text = "选择目录",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "同步预览",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "已选 ${selectedIndices.size}/${items.size}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "当前路径：$currentPath",
+                    text = "请选择要同步的视频文件",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },
         text = {
-            if (isLoading) {
-                Box(
+            Column {
+                // 全选/取消全选按钮
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onSelectAll() }
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.size(48.dp),
-                            strokeCap = StrokeCap.Round
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("加载中...")
-                    }
+                    androidx.compose.material3.Checkbox(
+                        checked = selectedIndices.size == items.size,
+                        onCheckedChange = { onSelectAll() }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (selectedIndices.size == items.size) "取消全选" else "全选",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
-            } else if (directories.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "此目录下没有子目录",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
+
+                HorizontalDivider()
+
+                // 文件列表
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 400.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    // 返回上一级按钮
-                    if (currentPath != "/") {
-                        item {
-                            val parentPath = currentPath.trimEnd('/').substringBeforeLast('/').ifEmpty { "/" }
-                            ListItem(
-                                headlineContent = { Text(".. 返回上级") },
-                                leadingContent = {
-                                    Icon(
-                                        imageVector = Icons.Default.Folder,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onNavigateUp(parentPath) }
-                            )
-                        }
-                    }
-
-                    // 目录列表
-                    items(directories) { dir ->
-                        val fullPath = if (currentPath.endsWith("/")) {
-                            "$currentPath$dir"
-                        } else {
-                            "$currentPath/$dir"
-                        }
-                        ListItem(
-                            headlineContent = { Text(dir) },
-                            leadingContent = {
-                                Icon(
-                                    imageVector = Icons.Default.Folder,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            trailingContent = {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = "选择",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            },
+                    itemsIndexed(items) { index, item ->
+                        val isSelected = index in selectedIndices
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { onNavigateUp(fullPath) }
-                        )
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                    else Color.Transparent
+                                )
+                                .clickable { onToggleSelection(index) }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { onToggleSelection(index) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                // 文件名
+                                Text(
+                                    text = item.fileName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                // 本地路径
+                                Text(
+                                    text = "本地：${item.localPath.substringAfterLast('/')}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                // 远端路径
+                                Text(
+                                    text = "远端：${item.remotePath}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            // 文件大小对比
+                            Column(
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                Text(
+                                    text = formatFileSize(item.remoteSize),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "替换 ${formatFileSize(item.localSize)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSelect(currentPath) }
+                onClick = onConfirm,
+                enabled = selectedIndices.isNotEmpty()
             ) {
-                Text("选择当前目录")
+                Text("开始同步 (${selectedIndices.size}个)")
             }
         },
         dismissButton = {
-            Row {
-                TextButton(onClick = onRefresh) {
-                    Text("刷新")
-                }
-                TextButton(onClick = onDismiss) {
-                    Text("取消")
-                }
+            TextButton(onClick = onDismiss) {
+                Text("取消")
             }
         }
     )
@@ -1553,6 +1393,197 @@ private suspend fun startSync(
 
             } catch (e: Exception) {
                 Logger.e("Sync", "处理任务异常: ${localVideo.name}", e)
+                e.printStackTrace()
+                val tempFile = java.io.File("$targetPath.tmp")
+                if (tempFile.exists()) tempFile.delete()
+                onTaskFailed(index, e.message ?: "未知错误")
+            }
+        }
+
+        // 同步完成
+        val completedCount = tasks.count { it.status == TaskStatus.COMPLETED }
+        Logger.i("Sync", "同步流程完成: 成功 $completedCount/${tasks.size}")
+        snackbarHostState.showSnackbar("同步完成，成功处理 $completedCount/${tasks.size} 个文件")
+
+    } catch (e: Exception) {
+        Logger.e("Sync", "同步过程异常", e)
+        onError("同步过程出错：${e.message}")
+    } finally {
+        smbManager.disconnect()
+        onDisconnected()
+        onSyncComplete()
+        Logger.i("Sync", "同步流程结束，连接已断开")
+    }
+}
+
+/**
+ * 使用预览结果执行同步流程
+ * @param previewItems 用户在预览对话框中选择的文件列表
+ */
+private suspend fun startSyncWithPreview(
+    nasHost: String,
+    nasPort: String,
+    shareName: String,
+    username: String,
+    password: String,
+    smbManager: SmbManager,
+    fileRepository: FileRepository,
+    settingsDataStore: SettingsDataStore,
+    snackbarHostState: SnackbarHostState,
+    previewItems: List<SyncPreviewItem>,
+    onConnected: () -> Unit,
+    onDisconnected: () -> Unit,
+    onTaskListReady: (List<TransferTask>) -> Unit,
+    onTaskStart: (Int) -> Unit,
+    onTaskProgress: (Int, Float, Long) -> Unit,
+    onTaskVerifying: (Int) -> Unit,
+    onTaskComplete: (Int) -> Unit,
+    onTaskFailed: (Int, String) -> Unit,
+    onSyncComplete: () -> Unit,
+    onError: (String) -> Unit
+) {
+    Logger.i("Sync", "开始同步（预览模式）- ${previewItems.size} 个文件")
+
+    val port = nasPort.toIntOrNull() ?: 445
+
+    try {
+        // 保存配置到 DataStore
+        settingsDataStore.saveNasConfig(
+            NasConfig(
+                host = nasHost,
+                port = port,
+                shareName = shareName,
+                username = username,
+                password = password,
+                remotePath = ""
+            )
+        )
+
+        // 建立 SMB 连接
+        val connected = smbManager.connect(
+            host = nasHost,
+            port = port,
+            username = username,
+            password = password,
+            shareName = shareName
+        )
+
+        if (!connected) {
+            onError("无法连接到 NAS，请检查网络和凭据")
+            onDisconnected()
+            return
+        }
+
+        onConnected()
+
+        // 构建任务列表
+        val tasks = previewItems.map { item ->
+            TransferTask(
+                fileName = item.fileName,
+                localSize = item.localSize,
+                remoteSize = item.remoteSize,
+                status = TaskStatus.PENDING
+            )
+        }
+        onTaskListReady(tasks)
+
+        // 逐个处理任务
+        for ((index, item) in previewItems.withIndex()) {
+            val localPath = item.localPath
+            val remotePath = item.remotePath
+            val targetPath = "${localPath.substringBeforeLast('/')}/${item.fileName}.${remotePath.substringAfterLast('.')}"
+
+            onTaskStart(index)
+            Logger.i("Sync", "开始处理任务 [$index]: ${item.fileName}")
+
+            try {
+                // 检查磁盘空间
+                val availableSpace = fileRepository.getAvailableSpace()
+                if (availableSpace < item.remoteSize) {
+                    Logger.w("Sync", "磁盘空间不足: 需要 ${item.remoteSize}B, 可用 ${availableSpace}B")
+                    onTaskFailed(index, "磁盘空间不足")
+                    continue
+                }
+
+                // 下载文件到临时路径
+                val tempPath = "$targetPath.tmp"
+                val tempFile = java.io.File(tempPath)
+                val outputStream = tempFile.outputStream()
+
+                Logger.i("Sync", "开始下载: $remotePath -> $tempPath")
+
+                val downloadSuccess = smbManager.downloadFile(
+                    remotePath = remotePath,
+                    outputStream = outputStream,
+                    onProgress = { downloaded, total ->
+                        val progress = if (total > 0) {
+                            (downloaded.toFloat() / total * 100)
+                        } else 0f
+                        onTaskProgress(index, progress, downloaded)
+                    }
+                )
+                outputStream.close()
+
+                if (!downloadSuccess) {
+                    Logger.e("Sync", "下载失败: ${item.fileName}")
+                    tempFile.delete()
+                    onTaskFailed(index, "下载失败")
+                    continue
+                }
+
+                Logger.i("Sync", "下载完成: ${item.fileName}")
+
+                // 防丢校验 - 严格比对文件大小
+                onTaskVerifying(index)
+
+                val localDownloadedSize = tempFile.length()
+                val remoteFileSize = item.remoteSize
+
+                Logger.d("Sync", "开始完整性校验: 远端=${remoteFileSize}B, 本地=${localDownloadedSize}B")
+
+                if (localDownloadedSize != remoteFileSize) {
+                    Logger.e("Sync", "完整性校验失败! 文件大小不一致: ${item.fileName}")
+                    tempFile.delete()
+                    onTaskFailed(index, "校验失败：远端${remoteFileSize}B，本地${localDownloadedSize}B")
+                    continue
+                }
+
+                Logger.i("Sync", "完整性校验通过: ${item.fileName}")
+
+                // 校验通过，重命名临时文件为目标文件
+                val targetFile = java.io.File(targetPath)
+                if (targetFile.exists()) targetFile.delete()
+                val renameSuccess = tempFile.renameTo(targetFile)
+                if (!renameSuccess) {
+                    Logger.e("Sync", "文件重命名失败: $targetPath")
+                    tempFile.delete()
+                    onTaskFailed(index, "文件重命名失败")
+                    continue
+                }
+
+                // 删除原视频
+                val localVideoInfo = FileRepository.LocalVideoInfo(
+                    name = item.fileName,
+                    extension = localPath.substringAfterLast('.'),
+                    path = localPath,
+                    size = item.localSize,
+                    uri = null
+                )
+                val deleteSuccess = fileRepository.deleteLocalVideo(localVideoInfo)
+                if (!deleteSuccess) {
+                    Logger.w("Sync", "原视频删除失败: $localPath")
+                } else {
+                    Logger.i("Sync", "原视频已删除: $localPath")
+                }
+
+                // 触发媒体库扫描
+                fileRepository.triggerMediaScan(targetPath)
+                Logger.i("Sync", "任务完成: ${item.fileName}")
+
+                onTaskComplete(index)
+
+            } catch (e: Exception) {
+                Logger.e("Sync", "处理任务异常: ${item.fileName}", e)
                 e.printStackTrace()
                 val tempFile = java.io.File("$targetPath.tmp")
                 if (tempFile.exists()) tempFile.delete()

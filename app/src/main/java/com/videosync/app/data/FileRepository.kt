@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import com.videosync.app.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -100,6 +101,8 @@ class FileRepository(private val context: Context) {
      */
     suspend fun scanAllVideos(): List<LocalVideoInfo> = withContext(Dispatchers.IO) {
         val videos = mutableListOf<LocalVideoInfo>()
+        var scannedCount = 0
+        var skippedCount = 0
 
         // 构建 MediaStore 查询 URI
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -138,6 +141,13 @@ class FileRepository(private val context: Context) {
                 val path = cursor.getString(pathColumn) ?: continue
                 val size = cursor.getLong(sizeColumn)
 
+                // 检查文件是否仍然存在（避免匹配已删除的文件）
+                val file = File(path)
+                if (!file.exists()) {
+                    skippedCount++
+                    continue
+                }
+
                 // 提取扩展名并检查是否为支持的视频格式
                 val extension = name.substringAfterLast('.', "").lowercase()
                 if (extension !in VIDEO_EXTENSIONS) continue
@@ -160,8 +170,11 @@ class FileRepository(private val context: Context) {
                         uri = contentUri
                     )
                 )
+                scannedCount++
             }
         }
+
+        Logger.d("FileRepository", "扫描完成：有效 $scannedCount 个，跳过已删除 $skippedCount 个")
 
         // 按基础文件名去重，保留第一个遇到的文件
         videos.distinctBy { it.name }

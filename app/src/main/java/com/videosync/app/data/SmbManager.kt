@@ -11,6 +11,7 @@ import com.hierynomus.smbj.connection.Connection
 import com.hierynomus.smbj.session.Session
 import com.hierynomus.smbj.share.DiskShare
 import com.hierynomus.smbj.share.File
+import com.videosync.app.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -236,56 +237,75 @@ class SmbManager {
         }
 
     /**
-     * 从远端下载文件
+     * 从远端下载文件（带重试机制）
      * @param remotePath 远端文件路径
      * @param outputStream 输出流（写入本地文件）
      * @param onProgress 下载进度回调 (已下载字节数, 总字节数)
+     * @param maxRetries 最大重试次数（默认3次）
+     * @return 下载是否成功
      */
     suspend fun downloadFile(
         remotePath: String,
         outputStream: OutputStream,
-        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> }
+        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
+        maxRetries: Int = 3
     ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val currentShare = share ?: return@withContext false
+        var lastException: Exception? = null
 
-            // 以读取模式打开远端文件
-            val remoteFile: File = currentShare.openFile(
-                remotePath,
-                EnumSet.of(AccessMask.GENERIC_READ),
-                null,
-                EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
-                SMB2CreateDisposition.FILE_OPEN,
-                null
-            )
+        for (attempt in 1..maxRetries) {
+            try {
+                Logger.d("SmbManager", "下载尝试 $attempt/$maxRetries: $remotePath")
 
-            val inputStream: InputStream = remoteFile.inputStream
+                val currentShare = share ?: return@withContext false
 
-            // 通过 DiskShare 获取文件大小
-            val fileInfo = currentShare.getFileInformation(remotePath)
-            val fileSize = fileInfo.standardInformation.endOfFile
+                // 以读取模式打开远端文件
+                val remoteFile: File = currentShare.openFile(
+                    remotePath,
+                    EnumSet.of(AccessMask.GENERIC_READ),
+                    null,
+                    EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
+                    SMB2CreateDisposition.FILE_OPEN,
+                    null
+                )
 
-            // 缓冲区读写
-            val buffer = ByteArray(8192)
-            var totalBytesRead = 0L
-            var bytesRead: Int
+                val inputStream: InputStream = remoteFile.inputStream
 
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                coroutineContext.ensureActive()
-                outputStream.write(buffer, 0, bytesRead)
-                totalBytesRead += bytesRead
-                onProgress(totalBytesRead, fileSize)
+                // 通过 DiskShare 获取文件大小
+                val fileInfo = currentShare.getFileInformation(remotePath)
+                val fileSize = fileInfo.standardInformation.endOfFile
+
+                // 缓冲区读写
+                val buffer = ByteArray(8192)
+                var totalBytesRead = 0L
+                var bytesRead: Int
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    coroutineContext.ensureActive()
+                    outputStream.write(buffer, 0, bytesRead)
+                    totalBytesRead += bytesRead
+                    onProgress(totalBytesRead, fileSize)
+                }
+
+                outputStream.flush()
+                inputStream.close()
+                remoteFile.close()
+
+                Logger.i("SmbManager", "下载成功: $remotePath")
+                return@withContext true
+
+            } catch (e: Exception) {
+                lastException = e
+                Logger.w("SmbManager", "下载失败 (尝试 $attempt/$maxRetries): ${e.message}")
+
+                if (attempt < maxRetries) {
+                    // 等待一段时间后重试
+                    kotlinx.coroutines.delay(1000L * attempt)
+                }
             }
-
-            outputStream.flush()
-            inputStream.close()
-            remoteFile.close()
-
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
         }
+
+        Logger.e("SmbManager", "下载最终失败: $remotePath", lastException)
+        false
     }
 
     /**
