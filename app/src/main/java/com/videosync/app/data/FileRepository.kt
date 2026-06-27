@@ -211,26 +211,39 @@ class FileRepository(private val context: Context) {
             }
         }
 
-        Logger.d("FileRepository", "MediaStore扫描完成：有效 $scannedCount 个，跳过已删除 $skippedCount 个")
+        Logger.i("FileRepository", "========== MediaStore扫描完成 ==========")
+        Logger.i("FileRepository", "MediaStore发现视频: $scannedCount 个")
+        Logger.i("FileRepository", "跳过已删除文件: $skippedCount 个")
+        Logger.i("FileRepository", "扫描的存储卷: ${volumes.size} 个")
 
         // 使用文件系统扫描作为补充，查找MediaStore可能遗漏的视频
         if (useFileSystemScan) {
+            Logger.i("FileRepository", "开始文件系统扫描作为补充...")
             val fsVideos = scanVideosFromFileSystem()
-            Logger.d("FileRepository", "文件系统扫描补充：${fsVideos.size} 个视频")
+            Logger.i("FileRepository", "文件系统扫描发现: ${fsVideos.size} 个视频")
             
             // 合并结果，按路径去重
             val existingPaths = videos.map { it.path }.toSet()
+            var newFromFs = 0
             for (fsVideo in fsVideos) {
                 if (fsVideo.path !in existingPaths) {
                     videos.add(fsVideo)
+                    newFromFs++
                     scannedCount++
                 }
             }
-            Logger.d("FileRepository", "合并后总计：$scannedCount 个视频")
+            Logger.i("FileRepository", "文件系统新增视频: $newFromFs 个（排除重复）")
+        } else {
+            Logger.i("FileRepository", "跳过文件系统扫描（已禁用）")
         }
 
+        Logger.i("FileRepository", "========== 扫描汇总 ==========")
+        Logger.i("FileRepository", "最终视频总数: ${videos.size}")
+        
         // 按完整路径去重（保留所有不同路径的同名文件）
-        videos.distinctBy { it.path }
+        val result = videos.distinctBy { it.path }
+        Logger.i("FileRepository", "去重后视频数: ${result.size}")
+        result
     }
 
     /**
@@ -241,59 +254,124 @@ class FileRepository(private val context: Context) {
     private suspend fun scanVideosFromFileSystem(): List<LocalVideoInfo> = withContext(Dispatchers.IO) {
         val videos = mutableListOf<LocalVideoInfo>()
         
+        Logger.i("FileRepository", "========== 文件系统扫描开始 ==========")
+        Logger.i("FileRepository", "外部存储根目录: ${Environment.getExternalStorageDirectory().absolutePath}")
+        
         // 定义要扫描的目录列表
         val scanDirectories = mutableListOf<File>()
+        val skippedDirectories = mutableListOf<String>()
         
         // 外部存储根目录
         val externalStorage = Environment.getExternalStorageDirectory()
         if (externalStorage.exists() && externalStorage.canRead()) {
             scanDirectories.add(externalStorage)
+            Logger.i("FileRepository", "✓ 添加外部存储根目录: ${externalStorage.absolutePath}")
+        } else {
+            Logger.w("FileRepository", "✗ 外部存储根目录不可访问: exists=${externalStorage.exists()}, canRead=${externalStorage.canRead()}")
         }
         
         // 常见的视频存储目录
         val commonVideoDirs = listOf(
             "Movies", "Video", "Videos", "DCIM", "Download", "Downloads",
             "Camera", "WhatsApp", "Telegram", "WeChat", "TikTok",
-            "Bilibili", "Youku", "iQiyi", "Tencent Video"
+            "Bilibili", "Youku", "iQiyi", "Tencent Video",
+            "QQ", "Douyin", "Kuaishou", "Xiaomi", "MIUI",
+            "Pictures", "Recordings", "ScreenRecorder"
         )
         
+        Logger.i("FileRepository", "检查常见视频目录...")
         for (dirName in commonVideoDirs) {
             val dir = File(externalStorage, dirName)
-            if (dir.exists() && dir.canRead() && !scanDirectories.contains(dir)) {
-                scanDirectories.add(dir)
+            if (dir.exists() && dir.canRead()) {
+                if (!scanDirectories.contains(dir)) {
+                    scanDirectories.add(dir)
+                    Logger.i("FileRepository", "✓ 添加目录: ${dir.absolutePath}")
+                }
+            } else if (dir.exists()) {
+                skippedDirectories.add("${dir.absolutePath} (无读取权限)")
+                Logger.w("FileRepository", "✗ 跳过目录(无权限): ${dir.absolutePath}")
             }
         }
         
+        // 检查 Android/media 目录（应用媒体文件）
+        val androidMediaDir = File(externalStorage, "Android/media")
+        if (androidMediaDir.exists() && androidMediaDir.canRead()) {
+            scanDirectories.add(androidMediaDir)
+            Logger.i("FileRepository", "✓ 添加 Android/media 目录: ${androidMediaDir.absolutePath}")
+        }
+        
+        Logger.i("FileRepository", "待扫描目录总数: ${scanDirectories.size}")
+        Logger.i("FileRepository", "跳过目录数: ${skippedDirectories.size}")
+        
         // 递归扫描每个目录
+        var totalFilesScanned = 0
         for (scanDir in scanDirectories) {
             try {
-                scanDirectoryRecursive(scanDir, videos)
+                Logger.i("FileRepository", "--- 开始扫描目录: ${scanDir.absolutePath} ---")
+                val videosBefore = videos.size
+                scanDirectoryRecursive(scanDir, videos, 0)
+                val newVideos = videos.size - videosBefore
+                Logger.i("FileRepository", "--- 目录扫描完成: ${scanDir.absolutePath}, 发现 $newVideos 个视频 ---")
+                totalFilesScanned++
             } catch (e: Exception) {
-                Logger.d("FileRepository", "扫描目录失败 ${scanDir.absolutePath}: ${e.message}")
+                Logger.e("FileRepository", "扫描目录失败 ${scanDir.absolutePath}: ${e.message}", e)
             }
         }
+        
+        Logger.i("FileRepository", "========== 文件系统扫描完成 ==========")
+        Logger.i("FileRepository", "已扫描目录数: $totalFilesScanned")
+        Logger.i("FileRepository", "发现视频总数: ${videos.size}")
         
         videos
     }
 
     /**
      * 递归扫描目录中的视频文件
+     * @param directory 要扫描的目录
+     * @param videos 视频列表（用于收集结果）
+     * @param depth 当前递归深度（用于日志缩进）
      */
-    private suspend fun scanDirectoryRecursive(directory: File, videos: MutableList<LocalVideoInfo>) {
+    private suspend fun scanDirectoryRecursive(directory: File, videos: MutableList<LocalVideoInfo>, depth: Int) {
         coroutineContext.ensureActive()
         
-        if (!directory.exists() || !directory.canRead()) return
+        if (!directory.exists()) {
+            Logger.d("FileRepository", "${"  ".repeat(depth)}目录不存在: ${directory.absolutePath}")
+            return
+        }
         
-        val files = directory.listFiles() ?: return
+        if (!directory.canRead()) {
+            Logger.w("FileRepository", "${"  ".repeat(depth)}无读取权限: ${directory.absolutePath}")
+            return
+        }
+        
+        val files = directory.listFiles()
+        if (files == null) {
+            Logger.w("FileRepository", "${"  ".repeat(depth)}无法列出文件: ${directory.absolutePath}")
+            return
+        }
+        
+        // 只在前几层深度记录目录遍历，避免日志过多
+        if (depth <= 2) {
+            Logger.d("FileRepository", "${"  ".repeat(depth)}扫描目录: ${directory.name}/ (${files.size} 项)")
+        }
         
         for (file in files) {
             coroutineContext.ensureActive()
             
             if (file.isDirectory) {
                 // 跳过隐藏目录和系统目录
-                if (!file.name.startsWith(".") && !file.name.startsWith("Android")) {
-                    scanDirectoryRecursive(file, videos)
+                if (file.name.startsWith(".")) {
+                    continue
                 }
+                if (file.name == "Android" && depth == 0) {
+                    // 只扫描 Android/media 子目录
+                    val androidMedia = File(file, "media")
+                    if (androidMedia.exists() && androidMedia.canRead()) {
+                        scanDirectoryRecursive(androidMedia, videos, depth + 1)
+                    }
+                    continue
+                }
+                scanDirectoryRecursive(file, videos, depth + 1)
             } else if (file.isFile) {
                 val extension = file.extension.lowercase()
                 if (extension in VIDEO_EXTENSIONS) {
@@ -319,8 +397,24 @@ class FileRepository(private val context: Context) {
                             isHighQualityCodec = codecInfo.isHighQuality
                         )
                     )
+                    
+                    if (depth <= 2) {
+                        Logger.d("FileRepository", "${"  ".repeat(depth)}  发现视频: ${file.name} (${formatFileSize(size)}, ${codecInfo.codec})")
+                    }
                 }
             }
+        }
+    }
+    
+    /**
+     * 格式化文件大小为可读字符串
+     */
+    private fun formatFileSize(size: Long): String {
+        return when {
+            size < 1024 -> "${size}B"
+            size < 1024 * 1024 -> "${size / 1024}KB"
+            size < 1024 * 1024 * 1024 -> "${"%.1f".format(size / (1024.0 * 1024.0))}MB"
+            else -> "${"%.2f".format(size / (1024.0 * 1024.0 * 1024.0))}GB"
         }
     }
 
