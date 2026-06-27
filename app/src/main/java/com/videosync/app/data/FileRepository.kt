@@ -458,9 +458,9 @@ class FileRepository(private val context: Context) {
                 // HEVC/VP9/AV1 编码 → 匹配原格式文件
                 remoteBaseName == localName && remoteExtension == localExtension.lowercase()
             } else {
-                // H.264/MPEG-4 等 → 匹配 MKV 文件
+                // H.264/MPEG-4 等 → 匹配 HQ 格式文件（mkv, mp4 等）
                 remoteBaseName == localName &&
-                        remoteExtension == "mkv" &&
+                        remoteExtension in HQ_EXTENSIONS &&
                         remoteExtension != localExtension.lowercase()
             }
         }
