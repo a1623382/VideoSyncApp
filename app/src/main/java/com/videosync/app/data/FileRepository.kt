@@ -27,7 +27,8 @@ class FileRepository(private val context: Context) {
         // 支持扫描的视频格式列表
         val VIDEO_EXTENSIONS = setOf(
             "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm",
-            "m4v", "mpg", "mpeg", "3gp", "ts", "vob", "rmvb", "rm"
+            "m4v", "mpg", "mpeg", "3gp", "ts", "vob", "rmvb", "rm",
+            "mts", "m2ts", "f4v", "asf", "divx", "ogv", "ogx", "mxf", "svi"
         )
 
         // 远端高画质格式（用于匹配替换）
@@ -101,19 +102,32 @@ class FileRepository(private val context: Context) {
 
     /**
      * 使用 MediaStore API 扫描设备内所有视频文件
-     * 支持多种视频格式，返回去重后的视频列表
-     * @return 视频文件信息列表
+     * 同时扫描外部存储和内部存储，支持多种视频格式
+     * @param useFileSystemScan 是否使用文件系统扫描作为补充（默认true）
+     * @return 视频文件信息列表（按路径去重，保留所有不同路径的同名文件）
      */
-    suspend fun scanAllVideos(): List<LocalVideoInfo> = withContext(Dispatchers.IO) {
+    suspend fun scanAllVideos(useFileSystemScan: Boolean = true): List<LocalVideoInfo> = withContext(Dispatchers.IO) {
         val videos = mutableListOf<LocalVideoInfo>()
         var scannedCount = 0
         var skippedCount = 0
 
-        // 构建 MediaStore 查询 URI
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        // 定义要扫描的存储卷列表：外部存储 + 内部存储
+        val volumes = mutableListOf<Uri>()
+        
+        // 外部存储卷
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            volumes.add(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL))
         } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            volumes.add(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+        }
+        
+        // 内部存储卷（Android 10+ 支持）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                volumes.add(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_INTERNAL))
+            } catch (e: Exception) {
+                Logger.d("FileRepository", "内部存储卷不可用: ${e.message}")
+            }
         }
 
         // 查询所有视频文件
@@ -121,77 +135,193 @@ class FileRepository(private val context: Context) {
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DATA,
-            MediaStore.Video.Media.SIZE
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.RELATIVE_PATH,
+            MediaStore.Video.Media.VOLUME_NAME
         )
 
         val sortOrder = "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
 
-        context.contentResolver.query(
-            collection,
-            projection,
-            null,
-            null,
-            sortOrder
-        )?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+        // 遍历每个存储卷
+        for (volumeUri in volumes) {
+            try {
+                context.contentResolver.query(
+                    volumeUri,
+                    projection,
+                    null,
+                    null,
+                    sortOrder
+                )?.use { cursor ->
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                    val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                    val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
+                    val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
 
-            while (cursor.moveToNext()) {
-                coroutineContext.ensureActive()
+                    while (cursor.moveToNext()) {
+                        coroutineContext.ensureActive()
 
-                val id = cursor.getLong(idColumn)
-                val name = cursor.getString(nameColumn) ?: continue
-                val path = cursor.getString(pathColumn) ?: continue
-                val size = cursor.getLong(sizeColumn)
+                        val id = cursor.getLong(idColumn)
+                        val name = cursor.getString(nameColumn) ?: continue
+                        val path = cursor.getString(pathColumn) ?: continue
+                        val size = cursor.getLong(sizeColumn)
 
-                // 检查文件是否仍然存在（避免匹配已删除的文件）
-                val file = File(path)
-                if (!file.exists()) {
-                    skippedCount++
-                    continue
+                        // 检查文件是否仍然存在（避免匹配已删除的文件）
+                        val file = File(path)
+                        if (!file.exists()) {
+                            skippedCount++
+                            continue
+                        }
+
+                        // 提取扩展名并检查是否为支持的视频格式
+                        val extension = name.substringAfterLast('.', "").lowercase()
+                        if (extension !in VIDEO_EXTENSIONS) continue
+
+                        // 获取基础文件名（不含扩展名）
+                        val baseName = name.substringBeforeLast('.')
+
+                        // 构建 content URI（使用对应的存储卷URI）
+                        val contentUri = ContentUris.withAppendedId(
+                            volumeUri,
+                            id
+                        )
+
+                        // 检测视频编码
+                        val codecInfo = try {
+                            VideoCodecHelper.detectCodec(context, path)
+                        } catch (e: Exception) {
+                            VideoCodecHelper.VideoCodecInfo()
+                        }
+
+                        videos.add(
+                            LocalVideoInfo(
+                                name = baseName,
+                                extension = extension,
+                                path = path,
+                                size = size,
+                                uri = contentUri,
+                                codec = codecInfo.codec,
+                                isHighQualityCodec = codecInfo.isHighQuality
+                            )
+                        )
+                        scannedCount++
+                    }
                 }
-
-                // 提取扩展名并检查是否为支持的视频格式
-                val extension = name.substringAfterLast('.', "").lowercase()
-                if (extension !in VIDEO_EXTENSIONS) continue
-
-                // 获取基础文件名（不含扩展名）
-                val baseName = name.substringBeforeLast('.')
-
-                // 构建 content URI
-                val contentUri = ContentUris.withAppendedId(
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    id
-                )
-
-                // 检测视频编码
-                val codecInfo = try {
-                    VideoCodecHelper.detectCodec(context, path)
-                } catch (e: Exception) {
-                    VideoCodecHelper.VideoCodecInfo()
-                }
-
-                videos.add(
-                    LocalVideoInfo(
-                        name = baseName,
-                        extension = extension,
-                        path = path,
-                        size = size,
-                        uri = contentUri,
-                        codec = codecInfo.codec,
-                        isHighQualityCodec = codecInfo.isHighQuality
-                    )
-                )
-                scannedCount++
+            } catch (e: Exception) {
+                Logger.d("FileRepository", "扫描存储卷失败: ${e.message}")
             }
         }
 
-        Logger.d("FileRepository", "扫描完成：有效 $scannedCount 个，跳过已删除 $skippedCount 个")
+        Logger.d("FileRepository", "MediaStore扫描完成：有效 $scannedCount 个，跳过已删除 $skippedCount 个")
 
-        // 按基础文件名去重，保留第一个遇到的文件
-        videos.distinctBy { it.name }
+        // 使用文件系统扫描作为补充，查找MediaStore可能遗漏的视频
+        if (useFileSystemScan) {
+            val fsVideos = scanVideosFromFileSystem()
+            Logger.d("FileRepository", "文件系统扫描补充：${fsVideos.size} 个视频")
+            
+            // 合并结果，按路径去重
+            val existingPaths = videos.map { it.path }.toSet()
+            for (fsVideo in fsVideos) {
+                if (fsVideo.path !in existingPaths) {
+                    videos.add(fsVideo)
+                    scannedCount++
+                }
+            }
+            Logger.d("FileRepository", "合并后总计：$scannedCount 个视频")
+        }
+
+        // 按完整路径去重（保留所有不同路径的同名文件）
+        videos.distinctBy { it.path }
+    }
+
+    /**
+     * 使用文件系统直接扫描设备内所有视频文件
+     * 作为MediaStore扫描的补充，查找可能被遗漏的视频
+     * @return 视频文件信息列表
+     */
+    private suspend fun scanVideosFromFileSystem(): List<LocalVideoInfo> = withContext(Dispatchers.IO) {
+        val videos = mutableListOf<LocalVideoInfo>()
+        
+        // 定义要扫描的目录列表
+        val scanDirectories = mutableListOf<File>()
+        
+        // 外部存储根目录
+        val externalStorage = Environment.getExternalStorageDirectory()
+        if (externalStorage.exists() && externalStorage.canRead()) {
+            scanDirectories.add(externalStorage)
+        }
+        
+        // 常见的视频存储目录
+        val commonVideoDirs = listOf(
+            "Movies", "Video", "Videos", "DCIM", "Download", "Downloads",
+            "Camera", "WhatsApp", "Telegram", "WeChat", "TikTok",
+            "Bilibili", "Youku", "iQiyi", "Tencent Video"
+        )
+        
+        for (dirName in commonVideoDirs) {
+            val dir = File(externalStorage, dirName)
+            if (dir.exists() && dir.canRead() && !scanDirectories.contains(dir)) {
+                scanDirectories.add(dir)
+            }
+        }
+        
+        // 递归扫描每个目录
+        for (scanDir in scanDirectories) {
+            try {
+                scanDirectoryRecursive(scanDir, videos)
+            } catch (e: Exception) {
+                Logger.d("FileRepository", "扫描目录失败 ${scanDir.absolutePath}: ${e.message}")
+            }
+        }
+        
+        videos
+    }
+
+    /**
+     * 递归扫描目录中的视频文件
+     */
+    private suspend fun scanDirectoryRecursive(directory: File, videos: MutableList<LocalVideoInfo>) {
+        coroutineContext.ensureActive()
+        
+        if (!directory.exists() || !directory.canRead()) return
+        
+        val files = directory.listFiles() ?: return
+        
+        for (file in files) {
+            coroutineContext.ensureActive()
+            
+            if (file.isDirectory) {
+                // 跳过隐藏目录和系统目录
+                if (!file.name.startsWith(".") && !file.name.startsWith("Android")) {
+                    scanDirectoryRecursive(file, videos)
+                }
+            } else if (file.isFile) {
+                val extension = file.extension.lowercase()
+                if (extension in VIDEO_EXTENSIONS) {
+                    val baseName = file.nameWithoutExtension
+                    val path = file.absolutePath
+                    val size = file.length()
+                    
+                    // 检测视频编码
+                    val codecInfo = try {
+                        VideoCodecHelper.detectCodec(context, path)
+                    } catch (e: Exception) {
+                        VideoCodecHelper.VideoCodecInfo()
+                    }
+                    
+                    videos.add(
+                        LocalVideoInfo(
+                            name = baseName,
+                            extension = extension,
+                            path = path,
+                            size = size,
+                            uri = null, // 文件系统扫描无法获取MediaStore URI
+                            codec = codecInfo.codec,
+                            isHighQualityCodec = codecInfo.isHighQuality
+                        )
+                    )
+                }
+            }
+        }
     }
 
     /**
